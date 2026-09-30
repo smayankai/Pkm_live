@@ -54,11 +54,73 @@ export default function TournamentTabs({
               Tournament data is being collected and normalized by Pkm Live.
             </p>
 
-            <div className="mt-6 rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-8 text-center">
-              <p className="text-zinc-500">
-                Tournament overview information will appear here.
-              </p>
-            </div>
+            {standings.length > 0 ? (
+              (() => {
+                const leader = standings.find(
+                  (entry: any) => Number(entry.rank) === 1
+                ) ?? standings[0];
+
+                const player = Array.isArray(leader.players)
+                  ? leader.players[0]
+                  : leader.players;
+
+                return (
+                  <div className="mt-6 rounded-xl border border-yellow-400/20 bg-yellow-400/[0.04] p-6">
+                    <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-wider text-yellow-400">
+                          Current leader
+                        </p>
+
+                        <h4 className="mt-2 text-2xl font-black">
+                          {player?.name ?? "Unknown player"}
+                        </h4>
+
+                        <p className="mt-1 text-sm text-zinc-500">
+                          {player?.country ?? "Country unavailable"}
+                        </p>
+                      </div>
+
+                      <div className="flex gap-3">
+                        <div className="rounded-xl bg-white/5 px-4 py-3 text-center">
+                          <p className="text-xs uppercase tracking-wider text-zinc-500">
+                            Rank
+                          </p>
+                          <p className="mt-1 text-xl font-bold text-white">
+                            #{leader.rank ?? 1}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl bg-white/5 px-4 py-3 text-center">
+                          <p className="text-xs uppercase tracking-wider text-zinc-500">
+                            Record
+                          </p>
+                          <p className="mt-1 text-xl font-bold text-white">
+                            {leader.wins ?? 0}-{leader.losses ?? 0}
+                            {leader.ties ? "-" + leader.ties : ""}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {player && (
+                      <Link
+                        href={"/players/" + leader.player_id}
+                        className="mt-5 inline-flex text-sm font-semibold text-yellow-400 hover:text-yellow-300"
+                      >
+                        View player profile →
+                      </Link>
+                    )}
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="mt-6 rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-8 text-center">
+                <p className="text-zinc-500">
+                  Tournament overview information will appear here.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
