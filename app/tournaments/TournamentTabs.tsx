@@ -136,6 +136,52 @@ export default function TournamentTabs({
               </p>
             </div>
 
+            {standings.length > 0 && (
+              <div className="mb-8">
+                <div className="mb-4">
+                  <h4 className="text-lg font-bold">Top 8</h4>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Current top players from the imported standings.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {standings.slice(0, 8).map((entry: any, index: number) => {
+                    const player = Array.isArray(entry.players)
+                      ? entry.players[0]
+                      : entry.players;
+
+                    return (
+                      <Link
+                        key={`top8-${entry.player_id ?? index}`}
+                        href={`/players/${entry.player_id}`}
+                        className="rounded-xl border border-white/10 bg-white/[0.02] p-4 transition hover:border-yellow-400/30 hover:bg-white/[0.04]"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-yellow-400/10 text-sm font-black text-yellow-400">
+                            #{entry.rank ?? index + 1}
+                          </span>
+
+                          <span className="text-xs font-medium text-zinc-500">
+                            {entry.wins ?? 0}-{entry.losses ?? 0}
+                            {entry.ties ? "-" + entry.ties : ""}
+                          </span>
+                        </div>
+
+                        <p className="mt-4 truncate font-bold text-white">
+                          {player?.name ?? "Unknown player"}
+                        </p>
+
+                        <p className="mt-1 truncate text-sm text-zinc-500">
+                          {player?.country ?? "Country unavailable"}
+                        </p>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="overflow-x-auto rounded-xl border border-white/10">
               <table className="w-full min-w-[700px] text-left text-sm">
                 <thead className="border-b border-white/10 bg-white/[0.03]">
