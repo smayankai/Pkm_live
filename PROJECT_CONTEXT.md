@@ -14,7 +14,7 @@ The goal is to make tournament information fast to understand without forcing us
 
 The application has a working tournament data pipeline from Limitless → Supabase → Next.js.
 
-The current verified full refresh processed:
+The latest verified full refresh processed:
 
 - 59 tournaments
 - 5,497 pairings received
@@ -22,11 +22,15 @@ The current verified full refresh processed:
 - 0 missing players
 - 0 failed tournaments
 
-The full refresh is now orchestrated by:
+The full refresh is orchestrated by:
 
 ```powershell
 node .\scripts\refresh.mjs
 ```
+
+The current MVP includes tournament discovery, tier filtering, tournament detail pages, standings, pairings/results, player profiles, rankings, decklists, and stream information.
+
+Tournament dates and times are displayed in **Japan Standard Time (JST, UTC+09:00)**.
 
 ## Stack
 
@@ -53,6 +57,7 @@ node .\scripts\refresh.mjs
 
 ```text
 app/
+├── page.tsx
 ├── players/
 │   ├── page.tsx
 │   ├── PlayerSearch.tsx
@@ -60,7 +65,7 @@ app/
 │       └── page.tsx
 ├── tournaments/
 │   ├── page.tsx
-│   ├── TournamentSearch.tsx
+│   ├── tournamentsSearch.tsx
 │   ├── TournamentTabs.tsx
 │   └── [id]/
 │       └── page.tsx
@@ -105,6 +110,7 @@ Important fields include:
 - `source`
 - `source_id`
 - `stream_url`
+- `tier`
 
 ### players
 
@@ -186,9 +192,10 @@ Purpose:
 - Store tournament metadata in Supabase
 - Determine initial tournament status
 - Store player count
-- Attempt to discover YouTube stream URLs from Limitless tournament detail pages
+- Discover YouTube stream URLs from Limitless tournament detail pages when available
+- Classify tournaments into Major, Official, Local, or Online tiers
 
-The importer currently avoids inserting an already-existing tournament.
+The importer updates existing tournament records when appropriate and avoids duplicating source records.
 
 ### 2. Standings importer
 
@@ -205,6 +212,18 @@ Purpose:
 - Upsert tournament standings
 - Preserve existing decklists when the current Limitless entry does not contain one
 - Support processing individual tournaments or the complete tournament set
+
+Single tournament:
+
+```powershell
+node .\scripts\import-standings.mjs <limitlessTournamentId>
+```
+
+All tournaments:
+
+```powershell
+node .\scripts\import-standings.mjs
+```
 
 ### 3. Pairings importer
 
@@ -276,18 +295,64 @@ This is a diagnostic/test script only.
 
 It is not part of the production refresh pipeline.
 
+## Tournament tiers
+
+The `tournaments.tier` field is used by the homepage and tournament browser.
+
+Classification:
+
+- **Major** — World Championships, International Championships, Regional Championships
+- **Official** — Special Events
+- **Local** — Locals / weekly events
+- **Online** — other online or unclassified events
+
+The classifier is intentionally conservative so themed historical tournaments do not become false major events.
+
 ## Tournament UI
 
 The tournament detail page currently combines:
 
 - Tournament metadata
+- Tournament tier
 - Standings
 - Pairings
 - Results
 - Player links
 - Stream information where available
 
-The tournament page uses the resolved Supabase tournament UUID for related standings and matches.
+The tournament browser supports:
+
+- Search
+- Tier filters
+- Major / Official / Local / Online badges
+- Tournament detail links
+
+The homepage includes:
+
+- Live-event presentation
+- Major events
+- Upcoming tournaments
+- Recent tournaments
+- Navigation to tournaments, players, and rankings
+
+## Stream handling
+
+Limitless stream URLs are stored in `tournaments.stream_url` when discovered.
+
+The tournament UI supports:
+
+- YouTube video URLs
+- YouTube channel/handle URLs
+- Twitch channel URLs
+- External stream links for unsupported formats
+
+YouTube channel URLs can be resolved server-side through:
+
+```text
+app/api/youtube-live/route.ts
+```
+
+The current stream system is still evolving because YouTube channel pages do not always expose a stable live video identifier.
 
 ## Current working features
 
@@ -298,6 +363,7 @@ The tournament page uses the resolved Supabase tournament UUID for related stand
 - Game
 - Player count
 - Tournament information
+- Tier badge
 - Limitless-backed tournament routing
 
 ### Standings
@@ -305,6 +371,7 @@ The tournament page uses the resolved Supabase tournament UUID for related stand
 - Imported from Limitless
 - Sorted by rank
 - Player names link to profiles
+- Decklists preserved/imported when available
 
 ### Player profiles
 
@@ -331,6 +398,11 @@ The tournament page uses the resolved Supabase tournament UUID for related stand
 - Shows players
 - Shows winners
 
+### Rankings
+
+- Dedicated rankings page exists
+- Rankings UI can be expanded as ranking logic matures
+
 ## Current development rules
 
 Preserve the working application.
@@ -353,6 +425,13 @@ Avoid:
 - Replacing working components
 - Moving files without a concrete reason
 
+Git workflow:
+
+- Local development is the default.
+- GitHub changes are made only when explicitly requested.
+- Never force-push over remote work without explicit approval.
+- Resolve remote divergence with a normal rebase/merge workflow.
+
 ## Design language
 
 Pkm Live should feel like a competitive/esports product rather than an admin spreadsheet.
@@ -367,12 +446,13 @@ Current visual direction:
 - Horizontal statistic distributions
 - Side-by-side information where useful
 - Compact but readable tournament information
+- Responsive/mobile-friendly layouts
 
 ## Known considerations
 
 ### Limitless synchronization
 
-The import system is functional, but the tournament importer currently behaves primarily as an insert importer. Future synchronization work may need to update existing tournament records when:
+The import system is functional, but future synchronization work may need to keep existing tournament records current when:
 
 - status changes
 - player count changes
@@ -391,6 +471,7 @@ Potential future work:
 - Better stream detection
 - Rankings
 - Meta analysis
+- Deck/team analytics
 
 ## Project goal
 
