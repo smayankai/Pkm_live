@@ -2,11 +2,12 @@
 
 **Competitive Pokémon, one screen.**
 
-Pkm Live is a competitive Pokémon tournament tracking platform focused on bringing tournament data, standings, pairings, results, player profiles, and decklists into one fast dashboard.
+Pkm Live is a competitive Pokémon tournament tracking platform focused on bringing tournament discovery, live-event context, standings, pairings, results, player profiles, rankings, streams, and decklists into one fast dashboard.
 
 ## Current capabilities
 
 - Tournament discovery and tournament detail pages
+- Tournament tiers: Major, Official, Local, Online
 - Limitless tournament data import
 - Tournament standings
 - Player profiles and tournament history
@@ -14,8 +15,10 @@ Pkm Live is a competitive Pokémon tournament tracking platform focused on bring
 - Round-based results display
 - Player and opponent links
 - Decklist data imported from Limitless when available
+- Stream URL discovery and tournament stream UI
 - Supabase/PostgreSQL data storage
 - Master refresh command for the full data pipeline
+- Tournament dates displayed in Japan Standard Time (JST, UTC+09:00)
 
 ## Tech stack
 
@@ -46,7 +49,7 @@ Pkm Live tournament UI
 
 ## Master data refresh
 
-The three import processes are now combined into one master command:
+The three production import processes are combined into one master command:
 
 ```powershell
 node .\scripts\refresh.mjs
@@ -58,18 +61,36 @@ The refresh runs sequentially:
 2. `scripts/import-standings.mjs`
 3. `scripts/import-pairings.mjs`
 
-The pairing importer can process every Limitless tournament stored in Supabase. It can also be run for one tournament by passing its Limitless ID:
+The pairing importer can process every Limitless tournament stored in Supabase or one tournament by Limitless ID:
 
 ```powershell
 node .\scripts\import-pairings.mjs
 node .\scripts\import-pairings.mjs <limitlessTournamentId>
 ```
 
-The all-tournament pairing import processes tournaments sequentially to reduce API pressure and upserts matches using the Limitless source identifiers.
+The standings importer supports the same two modes:
+
+```powershell
+node .\scripts\import-standings.mjs
+node .\scripts\import-standings.mjs <limitlessTournamentId>
+```
+
+The production refresh processes tournaments sequentially to reduce API pressure.
+
+## Tournament tiers
+
+Tournament records use a `tier` field:
+
+- **Major** — World Championships, International Championships, Regional Championships
+- **Official** — Special Events
+- **Local** — Locals / weekly events
+- **Online** — other online or unclassified events
+
+The importer intentionally uses conservative classification so themed historical events are not incorrectly promoted to official major events.
 
 ## Current verified refresh
 
-The latest successful full refresh processed:
+The latest verified full refresh processed:
 
 - 59 tournaments
 - 5,497 pairings received
@@ -83,6 +104,7 @@ This confirms the complete tournament → standings/players/decklists → pairin
 
 ```text
 app/
+├── page.tsx
 ├── players/
 │   ├── page.tsx
 │   ├── PlayerSearch.tsx
@@ -90,7 +112,7 @@ app/
 │       └── page.tsx
 ├── tournaments/
 │   ├── page.tsx
-│   ├── TournamentSearch.tsx
+│   ├── tournamentsSearch.tsx
 │   ├── TournamentTabs.tsx
 │   └── [id]/
 │       └── page.tsx
@@ -133,6 +155,13 @@ Run a complete data refresh:
 node .\scripts\refresh.mjs
 ```
 
+For a single tournament, use its Limitless `source_id`:
+
+```powershell
+node .\scripts\import-standings.mjs <limitlessTournamentId>
+node .\scripts\import-pairings.mjs <limitlessTournamentId>
+```
+
 ## Development principles
 
 Pkm Live is being developed incrementally.
@@ -144,6 +173,7 @@ Pkm Live is being developed incrementally.
 - Keep the existing data pipeline simple and understandable.
 - Use server components where possible.
 - Use client components only where interaction requires them.
+- Make local edits by default; change GitHub directly only when explicitly requested.
 
 ## Design direction
 
@@ -156,13 +186,14 @@ The product is designed as a modern competitive/esports dashboard:
 - Compact tournament information
 - Clean horizontal statistics
 - Minimal spreadsheet-like presentation
+- Mobile-friendly tournament browsing
 
 ## Roadmap
 
 Potential next areas include:
 
 - Improved live tournament updates
-- Stream integration
+- More reliable stream resolution and live embeds
 - Tournament champion and Top 8 presentation
 - Richer player statistics
 - Decklist viewer and analysis
@@ -170,6 +201,7 @@ Potential next areas include:
 - Meta analysis
 - Team/deck analytics
 - Faster incremental synchronization
+- Automatic refresh scheduling
 
 ## Author
 
