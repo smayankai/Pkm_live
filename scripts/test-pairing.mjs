@@ -1,4 +1,4 @@
-const tournamentId = "6aad0d0ae905c1db68744103";
+const tournamentId = "6abb9a23880ed327106df304";
 
 const urls = [
   `https://play.limitlesstcg.com/api/tournaments/${tournamentId}/pairings`,
@@ -23,7 +23,7 @@ for (const url of urls) {
     );
 
     console.dir(
-      Array.isArray(data) ? data.slice(0, 3) : data,
+      Array.isArray(data) ? data.slice(0, 20) : data,
       { depth: null }
     );
   }
