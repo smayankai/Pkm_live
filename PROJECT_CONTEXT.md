@@ -1,215 +1,312 @@
-﻿PROJECT_CONTEXT.md
-# Pkm Live - Project Context
+# Pkm Live — Project Context
 
-
-## Project Overview
-
+## Project identity
 
 Pkm Live is a competitive Pokémon tournament tracking platform.
 
+Product idea:
 
-The goal is to provide a single screen for competitive Pokémon players to view:
+> **Competitive Pokémon, one screen.**
 
+The goal is to make tournament information fast to understand without forcing users through spreadsheet-like interfaces.
 
-- Tournament information
-- Standings
-- Pairings
-- Results
-- Player profiles
-- Decklists
-- Tournament history
+## Current status
 
+The application has a working tournament data pipeline from Limitless → Supabase → Next.js.
 
-The project currently integrates tournament data from Limitless and stores normalized data in Supabase.
+The current verified full refresh processed:
 
+- 59 tournaments
+- 5,497 pairings received
+- 5,127 matches imported/upserted
+- 0 missing players
+- 0 failed tournaments
 
----
+The full refresh is now orchestrated by:
 
+```powershell
+node .\scripts\refresh.mjs
+```
 
-# Current Stack
+## Stack
 
-
-## Frontend
-
+### Frontend
 
 - Next.js 16
 - React
 - TypeScript
 - Tailwind CSS
 - App Router
+- Server components where possible
+- Client components only where interaction is required
 
-
-## Backend / Database
-
+### Backend / database
 
 - Supabase
 - PostgreSQL
 
+### External data source
 
-## Data Source
+- Limitless TCG API
 
+## Project structure
 
-Primary source:
-
-
-- Limitless TCG tournament API
-
-
----
-
-
-# Project Structure
-
-
-Important files:
-
-
+```text
 app/
-├── tournaments/
-│ ├── [id]/
-│ │ └── page.tsx
-│ └── TournamentTabs.tsx
-│
 ├── players/
-│ └── [id]/
-│ └── page.tsx
-│
-└── page.tsx
+│   ├── page.tsx
+│   ├── PlayerSearch.tsx
+│   └── [id]/
+│       └── page.tsx
+├── tournaments/
+│   ├── page.tsx
+│   ├── TournamentSearch.tsx
+│   ├── TournamentTabs.tsx
+│   └── [id]/
+│       └── page.tsx
+└── rankings/
+    └── page.tsx
+
 scripts/
+├── import-limitless.mjs
 ├── import-standings.mjs
 ├── import-pairings.mjs
+├── refresh.mjs
 └── test-pairing.mjs
-lib/
-└── supabase.ts
+```
 
+Important: `TournamentTabs.tsx` is directly under `app/tournaments/`, not under `app/tournaments/[id]/`.
 
----
+## Tournament routing
 
+Tournament detail pages support both:
 
-# Database Structure
+- Supabase tournament UUIDs
+- Limitless `source_id` values
 
+The page resolves the supplied route ID to the Supabase tournament record first.
 
-Current important tables:
+Once the tournament is resolved, standings and matches use the Supabase tournament UUID because those tables reference `tournaments.id`.
 
+## Database model
 
-## tournaments
+### tournaments
 
+Stores tournament metadata.
 
-Stores tournament information.
+Important fields include:
 
+- `id`
+- `name`
+- `game`
+- `status`
+- `start_date`
+- `player_count`
+- `source`
+- `source_id`
+- `stream_url`
 
-Examples:
+### players
 
+Stores normalized player records.
 
-- id
-- name
-- game
-- status
-- source
-- player_count
-- start_date
-- location
-- country
+Important fields include:
 
+- `id`
+- `name`
+- `country`
+- `source`
+- `source_id`
 
+### standings
 
+Connects players to tournaments and stores tournament performance.
 
-## players
+Important fields include:
 
+- `tournament_id`
+- `player_id`
+- `rank`
+- `wins`
+- `losses`
+- `ties`
+- `decklist`
 
-Stores player information.
+### matches
 
+Stores imported Limitless pairings/results.
 
-Examples:
+Important fields include:
 
+- `id`
+- `tournament_id`
+- `round`
+- `phase`
+- `table_number`
+- `player1_id`
+- `player2_id`
+- `winner_id`
+- `status`
+- `source`
+- `source_id`
 
-- id
-- name
-- country
-- source
-- source_id
+## Data pipeline
 
+```text
+Limitless API
+     ↓
+import-limitless.mjs
+     ↓
+tournaments
+     ↓
+import-standings.mjs
+     ↓
+players + standings + decklists
+     ↓
+import-pairings.mjs
+     ↓
+matches
+     ↓
+Next.js tournament UI
+```
 
+## Import scripts
 
+### 1. Tournament importer
 
-## standings
+File:
 
+```text
+scripts/import-limitless.mjs
+```
 
-Tournament player results.
+Purpose:
 
+- Fetch VGC tournaments from Limitless
+- Store tournament metadata in Supabase
+- Determine initial tournament status
+- Store player count
+- Attempt to discover YouTube stream URLs from Limitless tournament detail pages
 
-Contains:
+The importer currently avoids inserting an already-existing tournament.
 
+### 2. Standings importer
 
-- tournament_id
-- player_id
-- rank
-- wins
-- losses
-- ties
+File:
 
+```text
+scripts/import-standings.mjs
+```
 
+Purpose:
 
+- Fetch Limitless tournament details and standings
+- Upsert/update players
+- Upsert tournament standings
+- Preserve existing decklists when the current Limitless entry does not contain one
+- Support processing individual tournaments or the complete tournament set
 
-## matches
+### 3. Pairings importer
 
+File:
 
-Stores imported pairings.
+```text
+scripts/import-pairings.mjs
+```
 
+Purpose:
 
-Contains:
+- Fetch Limitless pairings
+- Resolve Limitless player source IDs to Supabase player IDs
+- Convert pairings into `matches`
+- Determine scheduled vs completed status from the Limitless winner value
+- Upsert matches using `source,source_id`
+- Process all Limitless tournaments when no tournament ID is supplied
+- Process one tournament when a Limitless ID is supplied
 
+All-tournament command:
 
-- tournament_id
-- round
-- phase
-- table number
-- player1_id
-- player2_id
-- winner_id
+```powershell
+node .\scripts\import-pairings.mjs
+```
 
+Single-tournament command:
 
----
+```powershell
+node .\scripts\import-pairings.mjs <limitlessTournamentId>
+```
 
+The importer processes tournaments sequentially.
 
-# Completed Features
+### 4. Master refresh
 
+File:
 
-## Tournament Pages
+```text
+scripts/refresh.mjs
+```
 
+Purpose:
 
-Working:
+Run all three production import scripts sequentially:
 
+```text
+STEP 1/3 — TOURNAMENTS
+STEP 2/3 — STANDINGS / PLAYERS / DECKLISTS
+STEP 3/3 — PAIRINGS / MATCHES
+```
+
+Command:
+
+```powershell
+node .\scripts\refresh.mjs
+```
+
+The master runner stops with a failure if one of the child import scripts exits unsuccessfully.
+
+### 5. Pairing diagnostic script
+
+File:
+
+```text
+scripts/test-pairing.mjs
+```
+
+This is a diagnostic/test script only.
+
+It is not part of the production refresh pipeline.
+
+## Tournament UI
+
+The tournament detail page currently combines:
+
+- Tournament metadata
+- Standings
+- Pairings
+- Results
+- Player links
+- Stream information where available
+
+The tournament page uses the resolved Supabase tournament UUID for related standings and matches.
+
+## Current working features
+
+### Tournament pages
 
 - Tournament header
-- Status
+- Tournament status
 - Game
 - Player count
-- Source
 - Tournament information
+- Limitless-backed tournament routing
 
-
-
-
-## Standings
-
-
-Working:
-
+### Standings
 
 - Imported from Limitless
 - Sorted by rank
-- Player names clickable
-- Links to player profiles
+- Player names link to profiles
 
-
-
-
-## Player Profiles
-
-
-Working:
-
+### Player profiles
 
 - Player information
 - Country
@@ -217,404 +314,86 @@ Working:
 - Placements
 - Records
 
+### Pairings
 
-
-
-## Pairings Tab
-
-
-Working:
-
-
-- Imported Limitless pairings
-- Player 1 / Player 2 display
+- Limitless pairings
+- Player 1 / Player 2
 - Player profile links
-- Round filtering
+- Round information
+- Table information
 - Winner display
 
-
-
-
-Winner styling:
-
-
-- "Winner:" = red
-- Player name = green
-
-
-
-
-## Results Tab
-
-
-Working:
-
+### Results
 
 - Uses imported matches
 - Grouped by round
 - Shows tables
 - Shows players
-- Shows winner
+- Shows winners
 
+## Current development rules
 
----
+Preserve the working application.
 
+Preferred workflow:
 
-# Current Data Flow
+1. Identify the exact file.
+2. Identify the exact block or component.
+3. Make the smallest required change.
+4. Save.
+5. Run the relevant test/import.
+6. Refresh the UI.
+7. Continue only after the previous change works.
 
+Avoid:
 
-Limitless API
-   ↓
-Import Scripts
-   ↓
-Supabase PostgreSQL
-   ↓
-Next.js Server Components
-   ↓
-Tournament UI
+- Large rewrites
+- Duplicate data pipelines
+- Unnecessary dependencies
+- Replacing working components
+- Moving files without a concrete reason
 
+## Design language
 
----
+Pkm Live should feel like a competitive/esports product rather than an admin spreadsheet.
 
+Current visual direction:
 
-# Import Scripts
-
-
-## Standings
-
-
-Run:
-
-
-node scripts/import-standings.mjs <limitlessTournamentId>
-
-
-
-
-## Pairings
-
-
-Run:
-
-
-node scripts/import-pairings.mjs
-
-
-Current pairing importer:
-
-
-- Fetches Limitless pairings
-- Resolves player names
-- Maps to Supabase player IDs
-- Inserts matches
-
-
----
-
-
-# Known Issues
-
-
-## Supabase Permissions
-
-
-When using service_role:
-
-
-Need correct privileges:
-
-
-Example:
-
-
-GRANT SELECT, INSERT, UPDATE ON public.matches TO service_role;
-
-
-For frontend access:
-
-
-GRANT SELECT ON public.matches TO anon;
-
-
----
-
-
-# Development Notes
-
-
-Do not replace working features.
-
-
-The project is currently stable.
-
-
-Preferred development style:
-
-
-1. Make small changes
-2. Test
-3. Refresh UI
-4. Continue
-
-
-Avoid large rewrites.
-
-
----
-
-
-# Planned Features
-
-
-## Near Future
-
-
-- Stream tab
-- Tournament champion card
-- Top 8 display
-- Better player statistics
-- Decklist display
-
-
-
-
-## Future
-
-
-- Live tournament updates
-- Automatic tournament syncing
-- Player rankings
-- Meta analysis
-- Team/deck analytics
-
-
----
-
-
-# Design Language
-
-
-Current theme:
-
-
-- Dark background
+- Near-black background
 - White/zinc text
 - Yellow accent
-- Minimal esports dashboard style
+- Clean cards
+- Strong hierarchy
+- Horizontal statistic distributions
+- Side-by-side information where useful
+- Compact but readable tournament information
 
+## Known considerations
 
-Main branding:
+### Limitless synchronization
 
+The import system is functional, but the tournament importer currently behaves primarily as an insert importer. Future synchronization work may need to update existing tournament records when:
 
-Pkm Live
+- status changes
+- player count changes
+- stream information becomes available
+- other tournament metadata changes
 
+### Live updates
 
-Tagline:
+The current pipeline is a refresh-based system rather than a continuous live-sync service.
 
+Potential future work:
 
-"Competitive Pokémon, one screen."
-________________
+- Incremental synchronization
+- Automatic refresh scheduling
+- Live match updates
+- Better stream detection
+- Rankings
+- Meta analysis
 
+## Project goal
 
-HANDOFF_PROMPT.md
-# Pkm Live Development Handoff Prompt
+Build a reliable, polished competitive Pokémon tournament dashboard:
 
-
-You are continuing development on the Pkm Live project.
-
-
-Read PROJECT_CONTEXT.md first.
-
-
-Your role:
-
-
-Continue improving the existing application without breaking working features.
-
-
----
-
-
-# Current State
-
-
-The application is a working competitive Pokémon tournament dashboard.
-
-
-Completed:
-
-
-- Tournament pages
-- Standings
-- Player profiles
-- Pairings
-- Results
-- Limitless imports
-
-
-The current priority is incremental improvements.
-
-
----
-
-
-# Important Rules
-
-
-Do NOT:
-
-
-- Rewrite existing architecture
-- Replace working components
-- Remove current features
-- Create duplicate data pipelines
-
-
-Always:
-
-
-- Make the smallest required change
-- Explain exactly which file changes
-- Explain exactly which block changes
-- Wait for confirmation after major edits
-
-
----
-
-
-# Current Architecture
-
-
-Frontend:
-
-
-Next.js App Router
-
-
-Main components:
-
-
-app/tournaments/[id]/page.tsx
-app/tournaments/TournamentTabs.tsx
-app/players/[id]/page.tsx
-
-
-Database:
-
-
-Supabase PostgreSQL
-
-
-Tables:
-
-
-tournaments
-players
-standings
-matches
-
-
----
-
-
-# Current User Workflow
-
-
-Tournament:
-
-
-Dashboard
-↓
-Tournament Page
-↓
-Standings
-↓
-Player Profile
-↓
-Pairings
-↓
-Results
-
-
----
-
-
-# Coding Style
-
-
-Follow existing style:
-
-
-- TypeScript
-- Tailwind
-- Server components where possible
-- Client components only where interaction is required
-- Minimal dependencies
-
-
----
-
-
-# Before Editing
-
-
-Always check:
-
-
-1. Which file?
-2. Which component?
-3. Which exact block?
-
-
-Do not provide vague instructions.
-
-
-Example preferred:
-
-
-"Open app/tournaments/TournamentTabs.tsx.
-
-
-Find this block:
-
-
-<code>
-
-
-Replace it with:
-
-
-<code>
-"
-
-
----
-
-
-# Current Development Roadmap
-
-
-Next possible tasks:
-
-
-1. Improve Stream tab
-2. Add tournament champion section
-3. Add Top 8 display
-4. Add player statistics
-5. Add decklist viewer
-6. Add live tournament refresh
-
-
----
-
-
-# Project Goal
-
-
-Build the best competitive Pokémon tournament dashboard:
-
-
-Pkm Live
-
-
-"Competitive Pokémon, one screen."
+**Pkm Live — Competitive Pokémon, one screen.**
