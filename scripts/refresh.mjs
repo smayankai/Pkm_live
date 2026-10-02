@@ -5,16 +5,7 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const projectRoot = path.resolve(
-  __dirname,
-  ".."
-);
-
-/*
- * ---------------------------------------------------------
- * RUN A SCRIPT
- * ---------------------------------------------------------
- */
+const projectRoot = path.resolve(__dirname, "..");
 
 function runScript(scriptPath, label) {
   return new Promise((resolve, reject) => {
@@ -34,9 +25,7 @@ function runScript(scriptPath, label) {
       }
     );
 
-    child.on("error", (error) => {
-      reject(error);
-    });
+    child.on("error", reject);
 
     child.on("close", (code) => {
       if (code === 0) {
@@ -52,29 +41,20 @@ function runScript(scriptPath, label) {
   });
 }
 
-/*
- * ---------------------------------------------------------
- * MAIN REFRESH
- * ---------------------------------------------------------
- */
-
 async function main() {
-const limitlessScript =
-  path.join(
+  const limitlessScript = path.join(
     projectRoot,
     "scripts",
     "import-limitless.mjs"
   );
 
-  const standingsScript =
-  path.join(
+  const standingsScript = path.join(
     projectRoot,
     "scripts",
     "import-standings.mjs"
   );
 
-  const pairingsScript =
-  path.join(
+  const pairingsScript = path.join(
     projectRoot,
     "scripts",
     "import-pairings.mjs"
@@ -89,52 +69,23 @@ const limitlessScript =
     "Starting complete tournament data refresh..."
   );
 
-  /*
-   * -------------------------------------------------------
-   * STEP 1
-   *
-   * Discover and import new Limitless tournaments.
-   * -------------------------------------------------------
-   */
-
+  // STEP 1 — tournaments
   await runScript(
     limitlessScript,
     "STEP 1/3 — TOURNAMENTS"
   );
 
-  /*
-   * -------------------------------------------------------
-   * STEP 2
-   *
-   * Import players, standings and decklists
-   * for every Limitless tournament.
-   * -------------------------------------------------------
-   */
-
+  // STEP 2 — standings, players, decklists
   await runScript(
     standingsScript,
     "STEP 2/3 — STANDINGS / PLAYERS / DECKLISTS"
   );
 
-  /*
-   * -------------------------------------------------------
-   * STEP 3
-   *
-   * Import pairings and match results
-   * for every Limitless tournament.
-   * -------------------------------------------------------
-   */
-
+  // STEP 3 — pairings and matches
   await runScript(
     pairingsScript,
     "STEP 3/3 — PAIRINGS / MATCHES"
   );
-
-  /*
-   * -------------------------------------------------------
-   * COMPLETE
-   * -------------------------------------------------------
-   */
 
   console.log("");
   console.log("========================================");
@@ -158,4 +109,5 @@ main().catch((error) => {
 
   process.exit(1);
 });
+
 

@@ -57,6 +57,75 @@ export default async function PlayerPage({
   );
 
   /*
+   * Match history
+   *
+   * Matches can contain the player as either
+   * player1_id or player2_id, so fetch both.
+   */
+  const { data: playerMatches, error: matchesError } =
+    await supabase
+      .from("matches")
+      .select(
+        "id, tournament_id, round, player1_id, player2_id, player1_score, player2_score, status, winner_id, phase, table_number"
+      )
+      .or(`player1_id.eq.${id},player2_id.eq.${id}`)
+      .order("round", { ascending: false });
+
+  if (matchesError) {
+    console.error("PLAYER MATCHES ERROR:", matchesError);
+  }
+
+  const opponentIds = Array.from(
+    new Set(
+      (playerMatches ?? [])
+        .map((match: any) =>
+          match.player1_id === id
+            ? match.player2_id
+            : match.player1_id
+        )
+        .filter(Boolean)
+    )
+  );
+
+  const tournamentIds = Array.from(
+    new Set(
+      (playerMatches ?? [])
+        .map((match: any) => match.tournament_id)
+        .filter(Boolean)
+    )
+  );
+
+  const { data: opponents } =
+    opponentIds.length > 0
+      ? await supabase
+          .from("players")
+          .select("id, name")
+          .in("id", opponentIds)
+      : { data: [] };
+
+  const { data: matchTournaments } =
+    tournamentIds.length > 0
+      ? await supabase
+          .from("tournaments")
+          .select("id, name, game, start_date")
+          .in("id", tournamentIds)
+      : { data: [] };
+
+  const opponentMap = new Map(
+    (opponents ?? []).map((opponent: any) => [
+      opponent.id,
+      opponent.name,
+    ])
+  );
+
+  const tournamentMap = new Map(
+    (matchTournaments ?? []).map((tournament: any) => [
+      tournament.id,
+      tournament,
+    ])
+  );
+
+  /*
    * Only completed tournaments count toward
    * career statistics.
    */
@@ -69,26 +138,23 @@ export default async function PlayerPage({
       return tournament?.status === "completed";
     }) ?? [];
 
-  const totalWins =
-    completedResults.reduce(
-      (total: number, result: any) =>
-        total + (result.wins ?? 0),
-      0
-    );
+  const totalWins = completedResults.reduce(
+    (total: number, result: any) =>
+      total + (result.wins ?? 0),
+    0
+  );
 
-  const totalLosses =
-    completedResults.reduce(
-      (total: number, result: any) =>
-        total + (result.losses ?? 0),
-      0
-    );
+  const totalLosses = completedResults.reduce(
+    (total: number, result: any) =>
+      total + (result.losses ?? 0),
+    0
+  );
 
-  const totalTies =
-    completedResults.reduce(
-      (total: number, result: any) =>
-        total + (result.ties ?? 0),
-      0
-    );
+  const totalTies = completedResults.reduce(
+    (total: number, result: any) =>
+      total + (result.ties ?? 0),
+    0
+  );
 
   const totalMatches =
     totalWins + totalLosses + totalTies;
@@ -156,8 +222,8 @@ export default async function PlayerPage({
 
       {/* Content */}
       <section className="mx-auto max-w-7xl px-6 py-10">
-        <div className="grid gap-6 md:grid-cols-3">
-
+        {/* Player Stats */}
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
           {/* Tournaments Played */}
           <div className="rounded-2xl border border-white/10 bg-[#111114] p-6">
             <p className="text-sm text-zinc-500">
@@ -166,6 +232,17 @@ export default async function PlayerPage({
 
             <p className="mt-2 text-3xl font-bold">
               {completedResults.length}
+            </p>
+          </div>
+
+          {/* Matches Played */}
+          <div className="rounded-2xl border border-white/10 bg-[#111114] p-6">
+            <p className="text-sm text-zinc-500">
+              Matches played
+            </p>
+
+            <p className="mt-2 text-3xl font-bold">
+              {totalMatches}
             </p>
           </div>
 
@@ -328,6 +405,179 @@ export default async function PlayerPage({
             </div>
           )}
         </div>
+
+        {/* Match History */}
+        <section className="mt-10">
+          <div className="rounded-2xl border border-white/10 bg-[#111114]">
+            <div className="border-b border-white/10 px-6 py-5">
+              <h3 className="text-xl font-bold">
+                Match history
+              </h3>
+
+              <p className="mt-1 text-sm text-zinc-500">
+                Recorded matches from imported tournaments.
+              </p>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[800px] text-left text-sm">
+                <thead className="border-b border-white/10 bg-white/[0.03]">
+                  <tr className="text-xs uppercase tracking-wider text-zinc-500">
+                    <th className="px-6 py-4">
+                      Tournament
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Round
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Opponent
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Result
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Score
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Table
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {(playerMatches ?? []).map(
+                    (match: any) => {
+                      const isPlayer1 =
+                        match.player1_id === id;
+
+                      const opponentId =
+                        isPlayer1
+                          ? match.player2_id
+                          : match.player1_id;
+
+                      const opponentName =
+                        opponentMap.get(opponentId) ??
+                        "Unknown player";
+
+                      const tournament =
+                        tournamentMap.get(
+                          match.tournament_id
+                        );
+
+                      const playerScore =
+                        isPlayer1
+                          ? match.player1_score
+                          : match.player2_score;
+
+                      const opponentScore =
+                        isPlayer1
+                          ? match.player2_score
+                          : match.player1_score;
+
+                      const hasRecordedScore =
+                        playerScore != null &&
+                        opponentScore != null &&
+                        !(
+                          Number(playerScore) === 0 &&
+                          Number(opponentScore) === 0
+                        );
+
+                      let result = "—";
+
+                      if (
+                        match.status ===
+                        "completed"
+                      ) {
+                        if (
+                          match.winner_id === id
+                        ) {
+                          result = "WIN";
+                        } else if (
+                          match.winner_id ===
+                          opponentId
+                        ) {
+                          result = "LOSS";
+                        } else {
+                          result = "DRAW";
+                        }
+                      }
+
+                      const resultClass =
+                        result === "WIN"
+                          ? "text-green-400"
+                          : result === "LOSS"
+                          ? "text-red-400"
+                          : "text-zinc-400";
+
+                      return (
+                        <tr
+                          key={match.id}
+                          className="border-b border-white/5 last:border-b-0"
+                        >
+                          <td className="px-6 py-5">
+                            {tournament ? (
+                              <Link
+                                href={`/tournaments/${tournament.id}`}
+                                className="font-semibold text-white hover:text-yellow-400"
+                              >
+                                {tournament.name}
+                              </Link>
+                            ) : (
+                              "Unknown tournament"
+                            )}
+
+                            {tournament?.game && (
+                              <p className="mt-1 text-xs text-zinc-600">
+                                {tournament.game}
+                              </p>
+                            )}
+                          </td>
+
+                          <td className="px-6 py-5 text-zinc-400">
+                            Round{" "}
+                            {match.round ?? "—"}
+                          </td>
+
+                          <td className="px-6 py-5 font-medium text-zinc-200">
+                            {opponentName}
+                          </td>
+
+                          <td
+                            className={`px-6 py-5 font-bold ${resultClass}`}
+                          >
+                            {result}
+                          </td>
+
+                          <td className="px-6 py-5 font-mono text-zinc-300">
+                            {hasRecordedScore
+                              ? `${playerScore} - ${opponentScore}`
+                              : "—"}
+                          </td>
+
+                          <td className="px-6 py-5 text-zinc-500">
+                            {match.table_number ??
+                              "—"}
+                          </td>
+                        </tr>
+                      );
+                    }
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {!playerMatches?.length && (
+              <div className="p-10 text-center text-zinc-500">
+                No match history available yet.
+              </div>
+            )}
+          </div>
+        </section>
       </section>
 
       {/* Decklists */}

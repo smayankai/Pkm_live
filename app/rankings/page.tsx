@@ -3,15 +3,19 @@ import { supabase } from "@/lib/supabase";
 
 type RankingRow = {
   player_id: string;
-  wins: number;
-  losses: number;
-  ties: number;
+  wins: number | null;
+  losses: number | null;
+  ties: number | null;
   tournaments:
     | {
         status: string | null;
+        game: string | null;
+        start_date: string | null;
       }
     | {
         status: string | null;
+        game: string | null;
+        start_date: string | null;
       }[]
     | null;
   players:
@@ -26,7 +30,28 @@ type RankingRow = {
     | null;
 };
 
-export default async function RankingsPage() {
+type RankingsPageProps = {
+  searchParams: Promise<{
+    game?: string;
+    period?: string;
+  }>;
+};
+
+export default async function RankingsPage({
+  searchParams,
+}: RankingsPageProps) {
+  const params = await searchParams;
+
+  const selectedGame =
+    params.game === "VGC" || params.game === "TCG"
+      ? params.game
+      : "ALL";
+
+  const selectedPeriod =
+    params.period === "2026" || params.period === "30d"
+      ? params.period
+      : "ALL";
+
   const { data: standings, error } = await supabase
     .from("standings")
     .select(`
@@ -35,7 +60,9 @@ export default async function RankingsPage() {
       losses,
       ties,
       tournaments (
-        status
+        status,
+        game,
+        start_date
       ),
       players (
         name,
@@ -47,6 +74,11 @@ export default async function RankingsPage() {
     console.error("RANKINGS ERROR:", error);
   }
 
+  const now = new Date();
+
+  const thirtyDaysAgo = new Date(now);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
   const playerMap = new Map<
     string,
     {
@@ -57,6 +89,7 @@ export default async function RankingsPage() {
       losses: number;
       ties: number;
       matches: number;
+      tournaments: number;
     }
   >();
 
@@ -71,31 +104,59 @@ export default async function RankingsPage() {
 
     if (!tournament || !player) continue;
 
-    // Only completed tournaments count toward global rankings.
+    // Only completed tournaments count.
     if (tournament.status !== "completed") continue;
+
+    // Game filter.
+    if (
+      selectedGame !== "ALL" &&
+      tournament.game !== selectedGame
+    ) {
+      continue;
+    }
+
+    // Period filter.
+    if (selectedPeriod !== "ALL") {
+      if (!tournament.start_date) continue;
+
+      const tournamentDate = new Date(tournament.start_date);
+
+      if (selectedPeriod === "2026") {
+        if (tournamentDate.getFullYear() !== 2026) {
+          continue;
+        }
+      }
+
+      if (selectedPeriod === "30d") {
+        if (tournamentDate < thirtyDaysAgo) {
+          continue;
+        }
+      }
+    }
+
+    const wins = row.wins ?? 0;
+    const losses = row.losses ?? 0;
+    const ties = row.ties ?? 0;
+    const matches = wins + losses + ties;
 
     const existing = playerMap.get(row.player_id);
 
     if (existing) {
-      existing.wins += row.wins ?? 0;
-      existing.losses += row.losses ?? 0;
-      existing.ties += row.ties ?? 0;
-      existing.matches +=
-        (row.wins ?? 0) +
-        (row.losses ?? 0) +
-        (row.ties ?? 0);
+      existing.wins += wins;
+      existing.losses += losses;
+      existing.ties += ties;
+      existing.matches += matches;
+      existing.tournaments += 1;
     } else {
       playerMap.set(row.player_id, {
         player_id: row.player_id,
         name: player.name,
         country: player.country,
-        wins: row.wins ?? 0,
-        losses: row.losses ?? 0,
-        ties: row.ties ?? 0,
-        matches:
-          (row.wins ?? 0) +
-          (row.losses ?? 0) +
-          (row.ties ?? 0),
+        wins,
+        losses,
+        ties,
+        matches,
+        tournaments: 1,
       });
     }
   }
@@ -115,13 +176,42 @@ export default async function RankingsPage() {
         return b.winRate - a.winRate;
       }
 
-      return b.wins - a.wins;
+      if (b.wins !== a.wins) {
+        return b.wins - a.wins;
+      }
+
+      if (b.matches !== a.matches) {
+        return b.matches - a.matches;
+      }
+
+      return a.name.localeCompare(b.name);
     });
+
+  const filterLink = (
+    game: string,
+    period: string
+  ) => {
+    const query = new URLSearchParams();
+
+    if (game !== "ALL") {
+      query.set("game", game);
+    }
+
+    if (period !== "ALL") {
+      query.set("period", period);
+    }
+
+    const queryString = query.toString();
+
+    return queryString
+      ? `/rankings?${queryString}`
+      : "/rankings";
+  };
 
   return (
     <main className="min-h-screen bg-[#09090b] text-white">
       {/* Header */}
-      <header className="border-b border-white/10 bg-[#0d0d10]">
+      <header className="sticky top-0 z-50 border-b border-white/10 bg-[#0d0d10]/95 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
           <Link href="/" className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-yellow-400 font-black text-black">
@@ -185,43 +275,146 @@ export default async function RankingsPage() {
             </h2>
 
             <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-500">
-              Player performance across completed tournaments tracked by
+              Performance across completed tournaments tracked by
               Pkm Live.
             </p>
           </div>
         </div>
       </section>
 
+      {/* Filters */}
+      <section className="mx-auto max-w-7xl px-6 pt-8">
+        <div className="flex flex-col gap-5 rounded-2xl border border-white/10 bg-[#111114] p-5 md:flex-row md:items-center md:justify-between">
+          {/* Game */}
+          <div>
+            <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-600">
+              Game
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              {["ALL", "VGC", "TCG"].map((game) => {
+                const active = selectedGame === game;
+
+                return (
+                  <Link
+                    key={game}
+                    href={filterLink(game, selectedPeriod)}
+                    className={`rounded-lg border px-4 py-2 text-xs font-semibold transition ${
+                      active
+                        ? "border-yellow-400 bg-yellow-400 text-black"
+                        : "border-white/10 bg-[#0d0d10] text-zinc-400 hover:border-white/20 hover:text-white"
+                    }`}
+                  >
+                    {game === "ALL" ? "All games" : game}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Period */}
+          <div>
+            <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-600">
+              Period
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              {[
+                ["ALL", "All time"],
+                ["2026", "2026"],
+                ["30d", "Last 30 days"],
+              ].map(([period, label]) => {
+                const active = selectedPeriod === period;
+
+                return (
+                  <Link
+                    key={period}
+                    href={filterLink(selectedGame, period)}
+                    className={`rounded-lg border px-4 py-2 text-xs font-semibold transition ${
+                      active
+                        ? "border-yellow-400 bg-yellow-400 text-black"
+                        : "border-white/10 bg-[#0d0d10] text-zinc-400 hover:border-white/20 hover:text-white"
+                    }`}
+                  >
+                    {label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Rankings */}
-      <section className="mx-auto max-w-7xl px-6 py-10">
+      <section className="mx-auto max-w-7xl px-6 py-8">
         {rankings.length > 0 ? (
-          <div className="grid gap-5 md:grid-cols-2">
+          <div className="space-y-4">
+            {/* Table header */}
+            <div className="hidden rounded-xl border border-white/10 bg-[#0d0d10] px-6 py-3 md:grid md:grid-cols-[80px_minmax(0,1fr)_120px_120px_120px_120px] md:items-center">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
+                Rank
+              </span>
+
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
+                Player
+              </span>
+
+              <span className="text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
+                Tournaments
+              </span>
+
+              <span className="text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
+                Matches
+              </span>
+
+              <span className="text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
+                Record
+              </span>
+
+              <span className="text-right text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
+                Win rate
+              </span>
+            </div>
+
             {rankings.map((player, index) => {
               const performanceWidth = Math.min(
                 player.winRate,
                 100
               );
 
+              const rank = index + 1;
+
               return (
                 <Link
                   key={player.player_id}
                   href={`/players/${player.player_id}`}
-                  className="group rounded-2xl border border-white/10 bg-[#111114] p-6 transition hover:border-yellow-400/30 hover:bg-[#131316]"
+                  className="group block rounded-2xl border border-white/10 bg-[#111114] p-5 transition hover:border-yellow-400/30 hover:bg-[#131316] md:px-6"
                 >
-                  {/* Player heading */}
-                  <div className="flex items-start gap-4">
-                    <div
-                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-sm font-black ${
-                        index < 3
-                          ? "bg-yellow-400 text-black"
-                          : "bg-white/5 text-zinc-500"
-                      }`}
-                    >
-                      {String(index + 1).padStart(2, "0")}
+                  <div className="grid gap-5 md:grid-cols-[80px_minmax(0,1fr)_120px_120px_120px_120px] md:items-center">
+                    {/* Rank */}
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-sm font-black ${
+                          rank === 1
+                            ? "bg-yellow-400 text-black"
+                            : rank === 2
+                              ? "bg-zinc-300 text-black"
+                              : rank === 3
+                                ? "bg-amber-700 text-white"
+                                : "bg-white/5 text-zinc-500"
+                        }`}
+                      >
+                        {String(rank).padStart(2, "0")}
+                      </div>
+
+                      <span className="text-xs text-zinc-700 md:hidden">
+                        RANK
+                      </span>
                     </div>
 
-                    <div className="min-w-0 flex-1">
-                      <h3 className="break-words text-xl font-bold leading-tight text-white transition group-hover:text-yellow-400">
+                    {/* Player */}
+                    <div className="min-w-0">
+                      <h3 className="break-words text-lg font-bold leading-tight text-white transition group-hover:text-yellow-400">
                         {player.name}
                       </h3>
 
@@ -232,74 +425,53 @@ export default async function RankingsPage() {
                       )}
                     </div>
 
-                    <div className="shrink-0 text-right">
-                      <p className="text-xl font-black text-yellow-400">
-                        {player.winRate.toFixed(1)}%
-                      </p>
+                    {/* Tournaments */}
+                    <div className="flex items-center justify-between md:block md:text-center">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600 md:hidden">
+                        Tournaments
+                      </span>
 
-                      <p className="mt-0.5 text-[10px] uppercase tracking-wider text-zinc-600">
+                      <span className="text-lg font-black text-white">
+                        {player.tournaments}
+                      </span>
+                    </div>
+
+                    {/* Matches */}
+                    <div className="flex items-center justify-between md:block md:text-center">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600 md:hidden">
+                        Matches
+                      </span>
+
+                      <span className="text-lg font-black text-white">
+                        {player.matches}
+                      </span>
+                    </div>
+
+                    {/* Record */}
+                    <div className="flex items-center justify-between md:block md:text-center">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600 md:hidden">
+                        Record
+                      </span>
+
+                      <span className="font-mono text-sm text-zinc-300">
+                        {player.wins} - {player.losses} - {player.ties}
+                      </span>
+                    </div>
+
+                    {/* Win rate */}
+                    <div className="flex items-center justify-between md:block md:text-right">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600 md:hidden">
                         Win rate
-                      </p>
+                      </span>
+
+                      <span className="text-xl font-black text-yellow-400">
+                        {player.winRate.toFixed(1)}%
+                      </span>
                     </div>
                   </div>
 
-                  {/* W / L / T */}
-                  <div className="mt-7 grid grid-cols-3 divide-x divide-white/10 rounded-xl border border-white/10 bg-[#0d0d10]">
-                    <div className="px-4 py-4 text-center">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
-                        Wins
-                      </p>
-
-                      <p className="mt-2 text-2xl font-black text-white">
-                        {player.wins}
-                      </p>
-
-                      <p className="mt-1 text-[10px] text-zinc-700">
-                        W
-                      </p>
-                    </div>
-
-                    <div className="px-4 py-4 text-center">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
-                        Losses
-                      </p>
-
-                      <p className="mt-2 text-2xl font-black text-white">
-                        {player.losses}
-                      </p>
-
-                      <p className="mt-1 text-[10px] text-zinc-700">
-                        L
-                      </p>
-                    </div>
-
-                    <div className="px-4 py-4 text-center">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
-                        Ties
-                      </p>
-
-                      <p className="mt-2 text-2xl font-black text-white">
-                        {player.ties}
-                      </p>
-
-                      <p className="mt-1 text-[10px] text-zinc-700">
-                        T
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Performance */}
-                  <div className="mt-6">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
-                        Performance
-                      </span>
-
-                      <span className="text-xs text-zinc-500">
-                        {player.matches} matches
-                      </span>
-                    </div>
-
+                  {/* Performance bar */}
+                  <div className="mt-5">
                     <div className="h-1.5 overflow-hidden rounded-full bg-white/5">
                       <div
                         className="h-full rounded-full bg-yellow-400 transition-all duration-500 group-hover:bg-yellow-300"
@@ -311,12 +483,20 @@ export default async function RankingsPage() {
                   </div>
 
                   {/* Footer */}
-                  <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-4">
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
-                      W / L / T
+                  <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-4">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-700">
+                      {selectedGame === "ALL"
+                        ? "All games"
+                        : selectedGame}
+                      {" · "}
+                      {selectedPeriod === "ALL"
+                        ? "All time"
+                        : selectedPeriod === "30d"
+                          ? "Last 30 days"
+                          : selectedPeriod}
                     </span>
 
-                    <span className="text-sm text-zinc-600 transition group-hover:translate-x-1 group-hover:text-yellow-400">
+                    <span className="text-xs text-zinc-600 transition group-hover:translate-x-1 group-hover:text-yellow-400">
                       View profile →
                     </span>
                   </div>
@@ -331,11 +511,22 @@ export default async function RankingsPage() {
             </p>
 
             <p className="mt-1 text-sm text-zinc-600">
-              Rankings will appear once completed tournament results have
-              been imported.
+              No completed tournament results match the selected
+              filters.
             </p>
           </div>
         )}
+      </section>
+
+      {/* JST Notice */}
+      <section className="mx-auto max-w-7xl px-6 pb-10">
+        <div className="rounded-xl border border-white/10 bg-[#0d0d10] px-5 py-4">
+          <p className="text-xs leading-5 text-zinc-600">
+            Rankings are calculated from completed tournaments in
+            Pkm Live. Tournament dates are displayed using Japan
+            Standard Time (JST, UTC+09:00).
+          </p>
+        </div>
       </section>
 
       {/* Footer */}

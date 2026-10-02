@@ -27,8 +27,7 @@ export default function TournamentTabs({
   const [youtubeChannelId, setYoutubeChannelId] =
     useState<string | null>(null);
 
-  const [youtubeResolving, setYoutubeResolving] =
-    useState(false);
+  const [youtubeResolving, setYoutubeResolving] = useState(false);
 
   const [youtubeResolveError, setYoutubeResolveError] =
     useState<string | null>(null);
@@ -55,8 +54,7 @@ export default function TournamentTabs({
     selectedRound === "all"
       ? pairings
       : pairings.filter(
-          (pairing) =>
-            String(pairing.round ?? 0) === selectedRound
+          (pairing) => String(pairing.round ?? 0) === selectedRound
         );
 
   const completedResults = filteredPairings.filter(
@@ -109,8 +107,7 @@ export default function TournamentTabs({
     try {
       const parsed = new URL(url);
 
-      const hostname =
-        parsed.hostname.toLowerCase();
+      const hostname = parsed.hostname.toLowerCase();
 
       if (
         hostname !== "youtube.com" &&
@@ -120,9 +117,7 @@ export default function TournamentTabs({
         return false;
       }
 
-      return /^\/@[^/]+\/?$/.test(
-        parsed.pathname
-      );
+      return /^\/@[^/]+\/?$/.test(parsed.pathname);
     } catch {
       return false;
     }
@@ -132,18 +127,13 @@ export default function TournamentTabs({
     try {
       const parsed = new URL(url);
 
-      const hostname =
-        parsed.hostname.toLowerCase();
+      const hostname = parsed.hostname.toLowerCase();
 
       if (
         hostname === "youtu.be" ||
         hostname === "www.youtu.be"
       ) {
-        return (
-          parsed.pathname
-            .split("/")
-            .filter(Boolean)[0] ?? null
-        );
+        return parsed.pathname.split("/").filter(Boolean)[0] ?? null;
       }
 
       if (
@@ -151,35 +141,25 @@ export default function TournamentTabs({
         hostname === "www.youtube.com" ||
         hostname === "m.youtube.com"
       ) {
-        const videoId =
-          parsed.searchParams.get("v");
+        const videoId = parsed.searchParams.get("v");
 
         if (videoId) {
           return videoId;
         }
 
-        const embedMatch =
-          parsed.pathname.match(
-            /^\/embed\/([^/?]+)/
-          );
+        const embedMatch = parsed.pathname.match(/^\/embed\/([^/?]+)/);
 
         if (embedMatch) {
           return embedMatch[1];
         }
 
-        const liveMatch =
-          parsed.pathname.match(
-            /^\/live\/([^/?]+)/
-          );
+        const liveMatch = parsed.pathname.match(/^\/live\/([^/?]+)/);
 
         if (liveMatch) {
           return liveMatch[1];
         }
 
-        const shortsMatch =
-          parsed.pathname.match(
-            /^\/shorts\/([^/?]+)/
-          );
+        const shortsMatch = parsed.pathname.match(/^\/shorts\/([^/?]+)/);
 
         if (shortsMatch) {
           return shortsMatch[1];
@@ -207,17 +187,10 @@ export default function TournamentTabs({
       return;
     }
 
-    const directVideoId =
-      getYouTubeVideoId(streamUrl);
+    const directVideoId = getYouTubeVideoId(streamUrl);
 
-    if (
-      directVideoId &&
-      !isYouTubeChannelUrl(streamUrl)
-    ) {
-      setResolvedYouTubeVideoId(
-        directVideoId
-      );
-
+    if (directVideoId && !isYouTubeChannelUrl(streamUrl)) {
+      setResolvedYouTubeVideoId(directVideoId);
       return;
     }
 
@@ -233,18 +206,14 @@ export default function TournamentTabs({
       setResolvedYouTubeVideoId(null);
 
       try {
-        const response =
-          await fetch(
-            `/api/youtube-live?url=${encodeURIComponent(
-              streamUrl
-            )}`,
-            {
-              cache: "no-store",
-            }
-          );
+        const response = await fetch(
+          `/api/youtube-live?url=${encodeURIComponent(streamUrl)}`,
+          {
+            cache: "no-store",
+          }
+        );
 
-        const data =
-          await response.json();
+        const data = await response.json();
 
         if (cancelled) {
           return;
@@ -252,18 +221,12 @@ export default function TournamentTabs({
 
         if (!response.ok) {
           throw new Error(
-            data?.error ??
-              "Failed to resolve YouTube channel"
+            data?.error ?? "Failed to resolve YouTube channel"
           );
         }
 
-        setYoutubeChannelId(
-          data.channelId ?? null
-        );
-
-        setResolvedYouTubeVideoId(
-          data.videoId ?? null
-        );
+        setYoutubeChannelId(data.channelId ?? null);
+        setResolvedYouTubeVideoId(data.videoId ?? null);
 
         if (!data.videoId) {
           setYoutubeResolveError(
@@ -275,10 +238,7 @@ export default function TournamentTabs({
           return;
         }
 
-        console.error(
-          "YouTube resolver error:",
-          error
-        );
+        console.error("YouTube resolver error:", error);
 
         setYoutubeResolveError(
           "Unable to find the current YouTube broadcast."
@@ -303,16 +263,13 @@ export default function TournamentTabs({
    * -------------------------------------------------------
    */
 
-  const streamProvider =
-    streamUrl
-      ? /twitch\.tv/i.test(streamUrl)
-        ? "Twitch"
-        : /youtube\.com|youtu\.be/i.test(
-            streamUrl
-          )
+  const streamProvider = streamUrl
+    ? /twitch\.tv/i.test(streamUrl)
+      ? "Twitch"
+      : /youtube\.com|youtu\.be/i.test(streamUrl)
         ? "YouTube"
         : "Stream"
-      : "Stream";
+    : "Stream";
 
   /*
    * -------------------------------------------------------
@@ -320,14 +277,11 @@ export default function TournamentTabs({
    * -------------------------------------------------------
    */
 
-  const getTwitchEmbedUrl = (
-    url: string
-  ) => {
+  const getTwitchEmbedUrl = (url: string) => {
     try {
       const parsed = new URL(url);
 
-      const hostname =
-        parsed.hostname.toLowerCase();
+      const hostname = parsed.hostname.toLowerCase();
 
       if (
         hostname !== "twitch.tv" &&
@@ -336,49 +290,33 @@ export default function TournamentTabs({
         return null;
       }
 
-      const parent =
-        window.location.hostname;
+      const parent = window.location.hostname;
 
-      const videoMatch =
-        parsed.pathname.match(
-          /^\/videos\/(\d+)/
-        );
+      const videoMatch = parsed.pathname.match(/^\/videos\/(\d+)/);
 
       if (videoMatch) {
         return (
           `https://player.twitch.tv/` +
-          `?video=${encodeURIComponent(
-            videoMatch[1]
-          )}` +
-          `&parent=${encodeURIComponent(
-            parent
-          )}` +
+          `?video=${encodeURIComponent(videoMatch[1])}` +
+          `&parent=${encodeURIComponent(parent)}` +
           `&muted=false`
         );
       }
 
-      const clipMatch =
-        parsed.pathname.match(
-          /^\/[^/]+\/clip\/([^/?]+)/
-        );
+      const clipMatch = parsed.pathname.match(
+        /^\/[^/]+\/clip\/([^/?]+)/
+      );
 
       if (clipMatch) {
         return (
           `https://player.twitch.tv/` +
-          `?clip=${encodeURIComponent(
-            clipMatch[1]
-          )}` +
-          `&parent=${encodeURIComponent(
-            parent
-          )}` +
+          `?clip=${encodeURIComponent(clipMatch[1])}` +
+          `&parent=${encodeURIComponent(parent)}` +
           `&muted=false`
         );
       }
 
-      const channel =
-        parsed.pathname
-          .split("/")
-          .filter(Boolean)[0];
+      const channel = parsed.pathname.split("/").filter(Boolean)[0];
 
       if (!channel) {
         return null;
@@ -395,22 +333,14 @@ export default function TournamentTabs({
         "subscriptions",
       ];
 
-      if (
-        reservedPaths.includes(
-          channel.toLowerCase()
-        )
-      ) {
+      if (reservedPaths.includes(channel.toLowerCase())) {
         return null;
       }
 
       return (
         `https://player.twitch.tv/` +
-        `?channel=${encodeURIComponent(
-          channel
-        )}` +
-        `&parent=${encodeURIComponent(
-          parent
-        )}` +
+        `?channel=${encodeURIComponent(channel)}` +
+        `&parent=${encodeURIComponent(parent)}` +
         `&muted=false`
       );
     } catch {
@@ -424,13 +354,11 @@ export default function TournamentTabs({
    * -------------------------------------------------------
    */
 
-  let streamEmbedUrl: string | null =
-    null;
+  let streamEmbedUrl: string | null = null;
 
   if (streamUrl) {
     if (isYouTubeUrl(streamUrl)) {
-      const directVideoId =
-        getYouTubeVideoId(streamUrl);
+      const directVideoId = getYouTubeVideoId(streamUrl);
 
       if (
         directVideoId &&
@@ -438,9 +366,7 @@ export default function TournamentTabs({
       ) {
         streamEmbedUrl =
           `https://www.youtube.com/embed/` +
-          `${encodeURIComponent(
-            directVideoId
-          )}?rel=0`;
+          `${encodeURIComponent(directVideoId)}?rel=0`;
       }
 
       if (
@@ -449,18 +375,13 @@ export default function TournamentTabs({
       ) {
         streamEmbedUrl =
           `https://www.youtube.com/embed/` +
-          `${encodeURIComponent(
-            resolvedYouTubeVideoId
-          )}` +
+          `${encodeURIComponent(resolvedYouTubeVideoId)}` +
           `?rel=0&autoplay=0`;
       }
     }
 
-    if (
-      /twitch\.tv/i.test(streamUrl)
-    ) {
-      streamEmbedUrl =
-        getTwitchEmbedUrl(streamUrl);
+    if (/twitch\.tv/i.test(streamUrl)) {
+      streamEmbedUrl = getTwitchEmbedUrl(streamUrl);
     }
   }
 
@@ -470,35 +391,24 @@ export default function TournamentTabs({
    * -------------------------------------------------------
    */
 
-  const MatchCard = ({
-    pairing,
-  }: {
-    pairing: any;
-  }) => {
-    const player1 =
-      pairing.player1 ?? null;
+  const MatchCard = ({ pairing }: { pairing: any }) => {
+    const player1 = pairing.player1 ?? null;
+    const player2 = pairing.player2 ?? null;
 
-    const player2 =
-      pairing.player2 ?? null;
-
-    const winnerId =
-      pairing.winner_id ?? null;
+    const winnerId = pairing.winner_id ?? null;
 
     const player1Winner =
-      winnerId &&
-      player1?.id === winnerId;
+      winnerId != null && player1?.id === winnerId;
 
     const player2Winner =
-      winnerId &&
-      player2?.id === winnerId;
+      winnerId != null && player2?.id === winnerId;
 
     return (
       <div className="group overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d10] transition hover:border-yellow-400/20">
         <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.02] px-5 py-3">
           <div className="flex items-center gap-3">
             <span className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
-              Table{" "}
-              {pairing.table_number ?? "—"}
+              Table {pairing.table_number ?? "—"}
             </span>
 
             <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-yellow-400">
@@ -507,8 +417,7 @@ export default function TournamentTabs({
           </div>
 
           <span className="text-xs font-medium text-zinc-600">
-            Round{" "}
-            {pairing.round ?? "—"}
+            Round {pairing.round ?? "—"}
           </span>
         </div>
 
@@ -530,9 +439,7 @@ export default function TournamentTabs({
                 <div className="min-w-0">
                   <p
                     className={`truncate text-base font-bold md:text-lg ${
-                      player1Winner
-                        ? "text-yellow-400"
-                        : "text-white"
+                      player1Winner ? "text-yellow-400" : "text-white"
                     }`}
                   >
                     {player1.name}
@@ -591,9 +498,7 @@ export default function TournamentTabs({
                 <div className="min-w-0 flex-1">
                   <p
                     className={`truncate text-base font-bold md:text-lg ${
-                      player2Winner
-                        ? "text-yellow-400"
-                        : "text-white"
+                      player2Winner ? "text-yellow-400" : "text-white"
                     }`}
                   >
                     {player2.name}
@@ -639,9 +544,7 @@ export default function TournamentTabs({
           <button
             key={tab.id}
             type="button"
-            onClick={() =>
-              setActiveTab(tab.id)
-            }
+            onClick={() => setActiveTab(tab.id)}
             className={`whitespace-nowrap px-5 py-4 text-sm font-semibold ${
               activeTab === tab.id
                 ? "border-b-2 border-yellow-400 text-white"
@@ -671,14 +574,10 @@ export default function TournamentTabs({
               (() => {
                 const leader =
                   standings.find(
-                    (entry: any) =>
-                      Number(entry.rank) === 1
+                    (entry: any) => Number(entry.rank) === 1
                   ) ?? standings[0];
 
-                const player =
-                  getPlayer(
-                    leader.players
-                  );
+                const player = getPlayer(leader.players);
 
                 return (
                   <div className="mt-6 rounded-xl border border-yellow-400/20 bg-yellow-400/[0.04] p-6">
@@ -689,13 +588,11 @@ export default function TournamentTabs({
                         </p>
 
                         <h4 className="mt-2 text-2xl font-black">
-                          {player?.name ??
-                            "Unknown player"}
+                          {player?.name ?? "Unknown player"}
                         </h4>
 
                         <p className="mt-1 text-sm text-zinc-500">
-                          {player?.country ??
-                            "Country unavailable"}
+                          {player?.country ?? "Country unavailable"}
                         </p>
                       </div>
 
@@ -706,9 +603,7 @@ export default function TournamentTabs({
                           </p>
 
                           <p className="mt-1 text-xl font-bold">
-                            #
-                            {leader.rank ??
-                              1}
+                            #{leader.rank ?? 1}
                           </p>
                         </div>
 
@@ -718,14 +613,8 @@ export default function TournamentTabs({
                           </p>
 
                           <p className="mt-1 text-xl font-bold">
-                            {leader.wins ??
-                              0}
-                            -
-                            {leader.losses ??
-                              0}
-                            {leader.ties
-                              ? `-${leader.ties}`
-                              : ""}
+                            {leader.wins ?? 0}-{leader.losses ?? 0}
+                            {leader.ties ? `-${leader.ties}` : ""}
                           </p>
                         </div>
                       </div>
@@ -778,53 +667,37 @@ export default function TournamentTabs({
                 </p>
 
                 <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  {standings
-                    .slice(0, 8)
-                    .map(
-                      (
-                        entry: any,
-                        index: number
-                      ) => {
-                        const player =
-                          getPlayer(
-                            entry.players
-                          );
+                  {standings.slice(0, 8).map(
+                    (entry: any, index: number) => {
+                      const player = getPlayer(entry.players);
 
-                        return (
-                          <Link
-                            key={`${entry.player_id}-${index}`}
-                            href={`/players/${entry.player_id}`}
-                            className="rounded-xl border border-white/10 bg-white/[0.02] p-4 transition hover:border-yellow-400/30"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-yellow-400/10 text-sm font-black text-yellow-400">
-                                #
-                                {entry.rank ??
-                                  index + 1}
-                              </span>
+                      return (
+                        <Link
+                          key={`${entry.player_id}-${index}`}
+                          href={`/players/${entry.player_id}`}
+                          className="rounded-xl border border-white/10 bg-white/[0.02] p-4 transition hover:border-yellow-400/30"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-yellow-400/10 text-sm font-black text-yellow-400">
+                              #{entry.rank ?? index + 1}
+                            </span>
 
-                              <span className="text-xs text-zinc-500">
-                                {entry.wins ??
-                                  0}
-                                -
-                                {entry.losses ??
-                                  0}
-                              </span>
-                            </div>
+                            <span className="text-xs text-zinc-500">
+                              {entry.wins ?? 0}-{entry.losses ?? 0}
+                            </span>
+                          </div>
 
-                            <p className="mt-4 truncate font-bold">
-                              {player?.name ??
-                                "Unknown player"}
-                            </p>
+                          <p className="mt-4 truncate font-bold">
+                            {player?.name ?? "Unknown player"}
+                          </p>
 
-                            <p className="mt-1 text-sm text-zinc-500">
-                              {player?.country ??
-                                "Country unavailable"}
-                            </p>
-                          </Link>
-                        );
-                      }
-                    )}
+                          <p className="mt-1 text-sm text-zinc-500">
+                            {player?.country ?? "Country unavailable"}
+                          </p>
+                        </Link>
+                      );
+                    }
+                  )}
                 </div>
               </div>
             )}
@@ -833,37 +706,19 @@ export default function TournamentTabs({
               <table className="w-full min-w-[700px] text-left text-sm">
                 <thead className="border-b border-white/10 bg-white/[0.03]">
                   <tr className="text-xs uppercase tracking-wider text-zinc-500">
-                    <th className="px-5 py-4">
-                      Rank
-                    </th>
-                    <th className="px-5 py-4">
-                      Player
-                    </th>
-                    <th className="px-5 py-4">
-                      Country
-                    </th>
-                    <th className="px-5 py-4">
-                      W
-                    </th>
-                    <th className="px-5 py-4">
-                      L
-                    </th>
-                    <th className="px-5 py-4">
-                      T
-                    </th>
+                    <th className="px-5 py-4">Rank</th>
+                    <th className="px-5 py-4">Player</th>
+                    <th className="px-5 py-4">Country</th>
+                    <th className="px-5 py-4">W</th>
+                    <th className="px-5 py-4">L</th>
+                    <th className="px-5 py-4">T</th>
                   </tr>
                 </thead>
 
                 <tbody>
                   {standings.map(
-                    (
-                      entry: any,
-                      index: number
-                    ) => {
-                      const player =
-                        getPlayer(
-                          entry.players
-                        );
+                    (entry: any, index: number) => {
+                      const player = getPlayer(entry.players);
 
                       return (
                         <tr
@@ -871,8 +726,7 @@ export default function TournamentTabs({
                           className="border-b border-white/5 last:border-0"
                         >
                           <td className="px-5 py-4 font-bold">
-                            {entry.rank ??
-                              index + 1}
+                            {entry.rank ?? index + 1}
                           </td>
 
                           <td className="px-5 py-4">
@@ -889,23 +743,19 @@ export default function TournamentTabs({
                           </td>
 
                           <td className="px-5 py-4 text-zinc-500">
-                            {player?.country ??
-                              "—"}
+                            {player?.country ?? "—"}
                           </td>
 
                           <td className="px-5 py-4">
-                            {entry.wins ??
-                              0}
+                            {entry.wins ?? 0}
                           </td>
 
                           <td className="px-5 py-4 text-zinc-400">
-                            {entry.losses ??
-                              0}
+                            {entry.losses ?? 0}
                           </td>
 
                           <td className="px-5 py-4 text-zinc-400">
-                            {entry.ties ??
-                              0}
+                            {entry.ties ?? 0}
                           </td>
                         </tr>
                       );
@@ -920,24 +770,48 @@ export default function TournamentTabs({
         {/* PAIRINGS */}
         {activeTab === "pairings" && !isUpcoming && (
           <div>
-            <h3 className="text-2xl font-bold">
-              Pairings
-            </h3>
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <div className="flex items-center gap-3">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-yellow-400/10 text-yellow-400">
+                    ⚔
+                  </span>
 
-            <p className="mt-2 text-sm text-zinc-500">
-              Player matchups by round
-            </p>
+                  <h3 className="text-2xl font-bold">
+                    Pairings
+                  </h3>
+                </div>
 
+                <p className="mt-2 text-sm text-zinc-500">
+                  Player matchups by round
+                  {filteredPairings.length > 0
+                    ? ` · ${filteredPairings.length} match${
+                        filteredPairings.length === 1 ? "" : "es"
+                      } shown`
+                    : ""}
+                </p>
+              </div>
+
+              {selectedRound !== "all" && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedRound("all")}
+                  className="w-fit text-xs font-semibold text-zinc-500 transition hover:text-yellow-400"
+                >
+                  Clear round filter ×
+                </button>
+              )}
+            </div>
+
+            {/* ROUND FILTER */}
             <div className="mt-6 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() =>
-                  setSelectedRound("all")
-                }
-                className={`rounded-lg px-4 py-2 text-sm font-semibold ${
+                onClick={() => setSelectedRound("all")}
+                className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
                   selectedRound === "all"
-                    ? "bg-yellow-400 text-black"
-                    : "bg-white/5 text-zinc-400"
+                    ? "bg-yellow-400 text-black shadow-lg shadow-yellow-400/10"
+                    : "border border-white/10 bg-white/[0.03] text-zinc-400 hover:border-white/20 hover:text-white"
                 }`}
               >
                 All Rounds
@@ -947,16 +821,11 @@ export default function TournamentTabs({
                 <button
                   key={round}
                   type="button"
-                  onClick={() =>
-                    setSelectedRound(
-                      String(round)
-                    )
-                  }
-                  className={`rounded-lg px-4 py-2 text-sm font-semibold ${
-                    selectedRound ===
-                    String(round)
-                      ? "bg-yellow-400 text-black"
-                      : "bg-white/5 text-zinc-400"
+                  onClick={() => setSelectedRound(String(round))}
+                  className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                    selectedRound === String(round)
+                      ? "bg-yellow-400 text-black shadow-lg shadow-yellow-400/10"
+                      : "border border-white/10 bg-white/[0.03] text-zinc-400 hover:border-white/20 hover:text-white"
                   }`}
                 >
                   Round {round}
@@ -965,57 +834,245 @@ export default function TournamentTabs({
             </div>
 
             {filteredPairings.length === 0 ? (
-              <div className="mt-6 rounded-xl border border-dashed border-white/10 p-10 text-center">
-                <p className="text-zinc-500">
-                  No pairings available yet.
-                </p>
+              <div className="mt-8 overflow-hidden rounded-2xl border border-dashed border-white/10 bg-white/[0.015]">
+                <div className="flex min-h-[280px] flex-col items-center justify-center px-6 text-center">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03]">
+                    <span className="text-xl">⚔</span>
+                  </div>
+
+                  <h4 className="mt-5 text-lg font-bold text-white">
+                    No pairings available
+                  </h4>
+
+                  <p className="mt-2 max-w-md text-sm leading-6 text-zinc-500">
+                    Pairings for this tournament or selected round have not
+                    been imported yet.
+                  </p>
+                </div>
               </div>
             ) : (
-              <div className="mt-8 space-y-8">
-                {groupByRound(
-                  filteredPairings
-                ).map(
+              <div className="mt-8 space-y-10">
+                {groupByRound(filteredPairings).map(
                   ([round, matches]) => (
-                    <div key={round}>
+                    <section key={round}>
+                      {/* ROUND HEADER */}
                       <div className="mb-4 flex items-center gap-3">
-                        <h4 className="text-sm font-bold uppercase tracking-[0.18em] text-yellow-400">
-                          Round {round}
-                        </h4>
+                        <div className="flex h-8 items-center rounded-lg bg-yellow-400/10 px-3">
+                          <span className="text-[10px] font-black uppercase tracking-[0.18em] text-yellow-400">
+                            Round {round}
+                          </span>
+                        </div>
 
                         <div className="h-px flex-1 bg-white/10" />
 
-                        <span className="text-xs text-zinc-600">
-                          {matches.length} matches
+                        <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-600">
+                          {matches.length}{" "}
+                          {matches.length === 1 ? "match" : "matches"}
                         </span>
                       </div>
 
-                      <div className="space-y-3">
-                        {matches.map(
-                          (pairing: any) => (
-                            <div
-                              key={pairing.id}
-                              className="rounded-xl border border-white/10 bg-white/5 p-4"
-                            >
-                              <p className="font-bold text-white">
-                                {pairing.player1?.name ??
-                                  "Unknown"}{" "}
-                                VS{" "}
-                                {pairing.player2?.name ??
-                                  "Unknown"}
-                              </p>
+                      {/* MATCHUP GRID */}
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        {matches.map((pairing: any, index: number) => {
+                          const player1 = pairing.player1 ?? null;
+                          const player2 = pairing.player2 ?? null;
 
-                              <p className="mt-1 text-xs text-zinc-500">
-                                Table{" "}
-                                {pairing.table_number ??
-                                  "—"}{" "}
-                                ·{" "}
-                                {pairing.status}
-                              </p>
+                          const player1Name =
+                            player1?.name ?? "Unknown player";
+                          const player2Name =
+                            player2?.name ?? "Unknown player";
+
+                          const isCompleted =
+                            pairing.status === "completed";
+
+                          const winnerId =
+                            pairing.winner_id ?? null;
+
+                          const player1Won =
+                            winnerId != null &&
+                            player1?.id === winnerId;
+
+                          const player2Won =
+                            winnerId != null &&
+                            player2?.id === winnerId;
+
+                          const isDraw =
+                            isCompleted &&
+                            winnerId == null &&
+                            player1 != null &&
+                            player2 != null;
+
+                          return (
+                            <div
+                              key={
+                                pairing.id ??
+                                `${round}-${pairing.table_number}-${index}`
+                              }
+                              className="group overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d10] transition hover:border-yellow-400/20 hover:bg-[#101014]"
+                            >
+                              {/* MATCH HEADER */}
+                              <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.02] px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
+                                    Table{" "}
+                                    {pairing.table_number ?? "—"}
+                                  </span>
+                                </div>
+
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] ${
+                                    isCompleted
+                                      ? "bg-emerald-400/10 text-emerald-400"
+                                      : "bg-white/5 text-zinc-500"
+                                  }`}
+                                >
+                                  {isCompleted
+                                    ? "Completed"
+                                    : pairing.status ?? "Pending"}
+                                </span>
+                              </div>
+
+                              {/* PLAYERS */}
+                              <div className="grid grid-cols-[1fr_auto_1fr] items-stretch">
+                                {/* PLAYER 1 */}
+                                {player1 ? (
+                                  <Link
+                                    href={`/players/${player1.id}`}
+                                    className={`relative flex min-h-[128px] items-center p-4 transition ${
+                                      player1Won
+                                        ? "bg-yellow-400/[0.055]"
+                                        : "hover:bg-white/[0.02]"
+                                    }`}
+                                  >
+                                    {player1Won && (
+                                      <div className="absolute inset-y-0 left-0 w-0.5 bg-yellow-400" />
+                                    )}
+
+                                    <div className="flex w-full items-center justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <p
+                                          className={`truncate text-sm font-bold md:text-base ${
+                                            player1Won
+                                              ? "text-yellow-400"
+                                              : "text-white"
+                                          }`}
+                                        >
+                                          {player1Name}
+                                        </p>
+
+                                        {player1.country && (
+                                          <p className="mt-1 truncate text-[9px] font-medium uppercase tracking-[0.16em] text-zinc-600">
+                                            {player1.country}
+                                          </p>
+                                        )}
+                                      </div>
+
+                                      {player1Won && (
+                                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-yellow-400 text-[10px] font-black text-black">
+                                          W
+                                        </span>
+                                      )}
+                                    </div>
+                                  </Link>
+                                ) : (
+                                  <div className="flex min-h-[128px] items-center p-4">
+                                    <span className="text-sm text-zinc-600">
+                                      Unknown player
+                                    </span>
+                                  </div>
+                                )}
+
+                                {/* VS */}
+                                <div className="flex w-12 items-center justify-center border-x border-white/10 bg-white/[0.015]">
+                                  <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-[#111114]">
+                                    <span className="text-[8px] font-black tracking-[0.12em] text-zinc-600">
+                                      VS
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* PLAYER 2 */}
+                                {player2 ? (
+                                  <Link
+                                    href={`/players/${player2.id}`}
+                                    className={`relative flex min-h-[128px] items-center p-4 text-right transition ${
+                                      player2Won
+                                        ? "bg-yellow-400/[0.055]"
+                                        : "hover:bg-white/[0.02]"
+                                    }`}
+                                  >
+                                    {player2Won && (
+                                      <div className="absolute inset-y-0 right-0 w-0.5 bg-yellow-400" />
+                                    )}
+
+                                    <div className="flex w-full items-center justify-between gap-3">
+                                      {player2Won && (
+                                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-yellow-400 text-[10px] font-black text-black">
+                                          W
+                                        </span>
+                                      )}
+
+                                      <div className="min-w-0 flex-1">
+                                        <p
+                                          className={`truncate text-sm font-bold md:text-base ${
+                                            player2Won
+                                              ? "text-yellow-400"
+                                              : "text-white"
+                                          }`}
+                                        >
+                                          {player2Name}
+                                        </p>
+
+                                        {player2.country && (
+                                          <p className="mt-1 truncate text-[9px] font-medium uppercase tracking-[0.16em] text-zinc-600">
+                                            {player2.country}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </Link>
+                                ) : (
+                                  <div className="flex min-h-[128px] items-center justify-end p-4">
+                                    <span className="text-sm text-zinc-600">
+                                      Unknown player
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* MATCH FOOTER */}
+                              <div className="flex items-center justify-between border-t border-white/10 bg-black/10 px-4 py-2.5">
+                                <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-600">
+                                  {pairing.phase
+                                    ? pairing.phase
+                                    : "Match"}
+                                </span>
+
+                                <span
+                                  className={`text-[11px] font-bold ${
+                                    player1Won || player2Won
+                                      ? "text-yellow-400"
+                                      : isDraw
+                                        ? "text-zinc-400"
+                                        : "text-zinc-600"
+                                  }`}
+                                >
+                                  {player1Won
+                                    ? `${player1Name} won`
+                                    : player2Won
+                                      ? `${player2Name} won`
+                                      : isDraw
+                                        ? "Match drawn"
+                                        : isCompleted
+                                          ? "Result recorded"
+                                          : "Awaiting result"}
+                                </span>
+                              </div>
                             </div>
-                          )
-                        )}
+                          );
+                        })}
                       </div>
-                    </div>
+                    </section>
                   )
                 )}
               </div>
@@ -1051,9 +1108,7 @@ export default function TournamentTabs({
             <div className="mt-7 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() =>
-                  setSelectedRound("all")
-                }
+                onClick={() => setSelectedRound("all")}
                 className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
                   selectedRound === "all"
                     ? "bg-yellow-400 text-black"
@@ -1067,14 +1122,9 @@ export default function TournamentTabs({
                 <button
                   key={round}
                   type="button"
-                  onClick={() =>
-                    setSelectedRound(
-                      String(round)
-                    )
-                  }
+                  onClick={() => setSelectedRound(String(round))}
                   className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-                    selectedRound ===
-                    String(round)
+                    selectedRound === String(round)
                       ? "bg-yellow-400 text-black"
                       : "border border-white/10 bg-white/[0.03] text-zinc-400 hover:border-white/20 hover:text-white"
                   }`}
@@ -1096,16 +1146,14 @@ export default function TournamentTabs({
                   </h4>
 
                   <p className="mt-2 max-w-md text-sm leading-6 text-zinc-500">
-                    Completed match results will appear here once
-                    they are available from the tournament data.
+                    Completed match results will appear here once they are
+                    available from the tournament data.
                   </p>
                 </div>
               </div>
             ) : (
               <div className="mt-8 space-y-10">
-                {groupByRound(
-                  completedResults
-                ).map(
+                {groupByRound(completedResults).map(
                   ([round, matches]) => (
                     <section key={round}>
                       <div className="mb-4 flex items-center gap-3">
@@ -1119,21 +1167,17 @@ export default function TournamentTabs({
 
                         <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-600">
                           {matches.length}{" "}
-                          {matches.length === 1
-                            ? "match"
-                            : "matches"}
+                          {matches.length === 1 ? "match" : "matches"}
                         </span>
                       </div>
 
                       <div className="space-y-3">
-                        {matches.map(
-                          (pairing: any) => (
-                            <MatchCard
-                              key={pairing.id}
-                              pairing={pairing}
-                            />
-                          )
-                        )}
+                        {matches.map((pairing: any) => (
+                          <MatchCard
+                            key={pairing.id}
+                            pairing={pairing}
+                          />
+                        ))}
                       </div>
                     </section>
                   )
@@ -1247,8 +1291,7 @@ export default function TournamentTabs({
 
                       {youtubeChannelId && (
                         <p className="mt-2 text-[10px] font-mono text-zinc-700">
-                          Channel:{" "}
-                          {youtubeChannelId}
+                          Channel: {youtubeChannelId}
                         </p>
                       )}
                     </div>
@@ -1276,7 +1319,8 @@ export default function TournamentTabs({
                       </p>
 
                       <p className="mt-1 text-sm text-zinc-500">
-                        This stream cannot be embedded here, but you can watch it directly.
+                        This stream cannot be embedded here, but you can watch
+                        it directly.
                       </p>
                     </div>
 
@@ -1317,9 +1361,7 @@ export default function TournamentTabs({
                   Stream detected automatically from Limitless.
                 </span>
 
-                <span>
-                  {streamProvider} broadcast
-                </span>
+                <span>{streamProvider} broadcast</span>
               </div>
             )}
           </div>
@@ -1328,3 +1370,4 @@ export default function TournamentTabs({
     </div>
   );
 }
+

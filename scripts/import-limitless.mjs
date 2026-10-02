@@ -18,6 +18,25 @@ const SUPABASE_SERVICE_ROLE_KEY =
 const API_URL =
   "https://play.limitlesstcg.com/api/tournaments?limit=200";
 
+/*
+  Recent tournaments are refreshed deeply.
+
+  This means stream/details discovery is only performed
+  for tournaments that are upcoming or started within
+  this many days.
+*/
+const DEEP_REFRESH_DAYS = 30;
+
+const RETRY_DELAYS = [
+  5000,
+  10000,
+  20000,
+  40000,
+  60000,
+];
+
+const MAX_RETRIES = RETRY_DELAYS.length;
+
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error(
     "Missing Supabase environment variables."
@@ -30,6 +49,96 @@ const supabase = createClient(
 );
 
 /* -------------------------------------------------------
+   HELPERS
+------------------------------------------------------- */
+
+function sleep(ms) {
+  return new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  );
+}
+
+function isDeepRefreshTournament(startDate) {
+  if (!startDate) {
+    return true;
+  }
+
+  const start = new Date(startDate);
+
+  if (Number.isNaN(start.getTime())) {
+    return true;
+  }
+
+  const cutoff = new Date();
+
+  cutoff.setDate(
+    cutoff.getDate() - DEEP_REFRESH_DAYS
+  );
+
+  /*
+    Upcoming tournaments are always included.
+  */
+
+  if (start > new Date()) {
+    return true;
+  }
+
+  /*
+    Recently completed tournaments are included.
+  */
+
+  return start >= cutoff;
+}
+
+/* -------------------------------------------------------
+   FETCH WITH RETRY
+------------------------------------------------------- */
+
+async function fetchWithRetry(url) {
+  let attempt = 0;
+
+  while (true) {
+    const response = await fetch(url);
+
+    if (response.ok) {
+      return response;
+    }
+
+    if (response.status === 429) {
+      if (attempt >= MAX_RETRIES) {
+        throw new Error(
+          `Limitless rate limit persisted after ${MAX_RETRIES} retries.`
+        );
+      }
+
+      const delay =
+        RETRY_DELAYS[attempt];
+
+      console.log("");
+      console.log(
+        "429 Too Many Requests."
+      );
+
+      console.log(
+        `Waiting ${delay / 1000} seconds before retry ${
+          attempt + 1
+        }/${MAX_RETRIES}...`
+      );
+
+      await sleep(delay);
+
+      attempt++;
+
+      continue;
+    }
+
+    throw new Error(
+      `Limitless request failed: ${response.status} ${response.statusText}`
+    );
+  }
+}
+
+/* -------------------------------------------------------
    TOURNAMENT TIER DETECTION
 ------------------------------------------------------- */
 
@@ -38,12 +147,6 @@ function getTournamentTier(name) {
     .toLowerCase()
     .trim();
 
-  /*
-    MAJOR EVENTS
-
-    World Championships
-  */
-
   if (
     normalizedName.includes("world championships") ||
     normalizedName.includes("world championship")
@@ -51,16 +154,13 @@ function getTournamentTier(name) {
     return "major";
   }
 
-  /*
-    International Championships
-
-    Also include the common event abbreviations:
-    NAIC, EUIC, LAIC, OCIC
-  */
-
   if (
-    normalizedName.includes("international championships") ||
-    normalizedName.includes("international championship") ||
+    normalizedName.includes(
+      "international championships"
+    ) ||
+    normalizedName.includes(
+      "international championship"
+    ) ||
     normalizedName.includes("international") ||
     /\bnaic\b/i.test(normalizedName) ||
     /\beuic\b/i.test(normalizedName) ||
@@ -70,21 +170,17 @@ function getTournamentTier(name) {
     return "major";
   }
 
-  /*
-    Regional Championships
-  */
-
   if (
-    normalizedName.includes("regional championships") ||
-    normalizedName.includes("regional championship") ||
+    normalizedName.includes(
+      "regional championships"
+    ) ||
+    normalizedName.includes(
+      "regional championship"
+    ) ||
     /\bregional\b/i.test(normalizedName)
   ) {
     return "major";
   }
-
-  /*
-    OFFICIAL EVENTS
-  */
 
   if (
     normalizedName.includes("special event") ||
@@ -92,10 +188,6 @@ function getTournamentTier(name) {
   ) {
     return "official";
   }
-
-  /*
-    LOCAL EVENTS
-  */
 
   if (
     normalizedName.includes("local") ||
@@ -105,13 +197,31 @@ function getTournamentTier(name) {
     return "local";
   }
 
-  /*
-    DEFAULT
-
-    Everything else is treated as an online event.
-  */
-
   return "online";
+}
+
+/* -------------------------------------------------------
+   GAME NORMALIZATION
+------------------------------------------------------- */
+
+function normalizeGame(game) {
+  if (!game) {
+    return null;
+  }
+
+  const normalized = String(game)
+    .trim()
+    .toUpperCase();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === "PTCG") {
+    return "TCG";
+  }
+
+  return normalized;
 }
 
 /* -------------------------------------------------------
@@ -123,24 +233,11 @@ async function findStream(tournamentId) {
     `https://play.limitlesstcg.com/tournament/${tournamentId}/details`;
 
   try {
-    const response = await fetch(url);
+    const response =
+      await fetchWithRetry(url);
 
-    if (!response.ok) {
-      console.log(
-        `Could not fetch tournament details for ${tournamentId}`
-      );
-
-      return null;
-    }
-
-    const html = await response.text();
-
-    /*
-      Limitless may expose stream URLs in normal HTML,
-      embedded JSON, escaped JSON, or page data.
-
-      Normalize common encodings first.
-    */
+    const html =
+      await response.text();
 
     const normalizedHtml = html
       .replace(/\\u0026/g, "&")
@@ -149,165 +246,43 @@ async function findStream(tournamentId) {
       .replace(/&#x2F;/gi, "/")
       .replace(/&#47;/g, "/");
 
-    /*
-      Supported stream URL patterns.
-    */
-
-    const streamPatterns = [
-      // YouTube watch
-      /https?:\/\/(?:www\.)?youtube\.com\/watch\?v=[A-Za-z0-9_-]+/i,
-
-      // YouTube embed
-      /https?:\/\/(?:www\.)?youtube\.com\/embed\/[A-Za-z0-9_-]+/i,
-
-      // YouTube live
-      /https?:\/\/(?:www\.)?youtube\.com\/live\/[A-Za-z0-9_-]+/i,
-
-      // YouTube channel
-      /https?:\/\/(?:www\.)?youtube\.com\/(?:@|channel\/|c\/)[A-Za-z0-9_.@-]+/i,
-
-      // YouTube short link
-      /https?:\/\/youtu\.be\/[A-Za-z0-9_-]+/i,
-
-      // Twitch
-      /https?:\/\/(?:www\.)?twitch\.tv\/[A-Za-z0-9_]+/i,
-    ];
-
-    /*
-      First pass:
-      Search the normalized HTML directly.
-    */
-
-    for (const pattern of streamPatterns) {
-      const match =
-        normalizedHtml.match(pattern);
-
-      if (match) {
-        return match[0];
-      }
-    }
-
-    /*
-      Second pass:
-      Extract all URLs from the page and inspect them.
-    */
-
-    const urls =
-      normalizedHtml.match(
-        /https?:\/\/[^\s"'<>\\]+/gi
-      ) ?? [];
-
-    for (const rawUrl of urls) {
-      const cleanUrl = rawUrl.replace(
-        /[),.;]+$/,
-        ""
-      );
-
-      const isTwitch =
-        /(?:www\.)?twitch\.tv\//i.test(
-          cleanUrl
-        );
-
-      const isYouTube =
-        /(?:www\.)?youtube\.com\//i.test(
-          cleanUrl
-        ) ||
-        /youtu\.be\//i.test(
-          cleanUrl
-        );
-
-      if (isTwitch || isYouTube) {
-        return cleanUrl;
-      }
-    }
-
-    /*
-      Third pass:
-      Look specifically around stream-related text.
-    */
-
     const streamContextPatterns = [
-      /stream.{0,500}(youtube|twitch).{0,500}/is,
-      /(youtube|twitch).{0,500}stream.{0,500}/is,
+      /(?:stream|streams|streamed|broadcast|watch live|live stream|livestream).{0,800}(https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|live\/|embed\/)|youtu\.be\/|twitch\.tv\/)[A-Za-z0-9_?=&./@-]+)/is,
+
+      /(https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|live\/|embed\/)|youtu\.be\/|twitch\.tv\/)[A-Za-z0-9_?=&./@-]+).{0,800}(?:stream|streams|streamed|broadcast|watch live|live stream|livestream)/is,
     ];
 
     for (const pattern of streamContextPatterns) {
-      const contextMatch =
+      const match =
         normalizedHtml.match(pattern);
 
-      if (!contextMatch) {
+      if (!match) {
         continue;
       }
 
-      const contextUrls =
-        contextMatch[0].match(
-          /https?:\/\/[^\s"'<>\\]+/gi
-        ) ?? [];
+      const possibleUrl =
+        match[1] ?? match[2];
 
-      for (const rawUrl of contextUrls) {
-        const cleanUrl = rawUrl.replace(
-          /[),.;]+$/,
-          ""
-        );
-
-        if (
-          /youtube\.com\//i.test(cleanUrl) ||
-          /youtu\.be\//i.test(cleanUrl) ||
-          /twitch\.tv\//i.test(cleanUrl)
-        ) {
-          return cleanUrl;
-        }
+      if (!possibleUrl) {
+        continue;
       }
+
+      return possibleUrl.replace(
+        /[),.;]+$/,
+        ""
+      );
     }
 
     return null;
   } catch (error) {
     console.error(
       `Failed to find stream for ${tournamentId}:`,
-      error
+      error instanceof Error
+        ? error.message
+        : String(error)
     );
 
     return null;
-  }
-}
-
-async function detectTournamentGame(tournamentId, fallbackGame) {
-  const url =
-    `https://play.limitlesstcg.com/tournament/${tournamentId}/details`;
-
-  try {
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      return fallbackGame;
-    }
-
-    const html = await response.text();
-
-    const normalizedHtml = html
-      .replace(/\\u0026/g, "&")
-      .replace(/\\\//g, "/")
-      .replace(/&quot;/g, '"')
-      .replace(/&#x2F;/gi, "/")
-      .replace(/&#47;/g, "/");
-
-    const isPTCG =
-      /value="PTCG"/i.test(normalizedHtml) ||
-      (/Pokémon TCG/i.test(normalizedHtml) &&
-        /Standard format/i.test(normalizedHtml));
-
-    if (isPTCG) {
-      return "TCG";
-    }
-
-    return fallbackGame;
-  } catch (error) {
-    console.log(
-      `Could not detect game for ${tournamentId}:`,
-      error.message
-    );
-
-    return fallbackGame;
   }
 }
 
@@ -318,21 +293,26 @@ async function detectTournamentGame(tournamentId, fallbackGame) {
 async function main() {
   console.log("");
   console.log("========================================");
-  console.log("PKM LIVE — LIMITLESS TOURNAMENT IMPORT");
+  console.log(
+    "PKM LIVE — LIMITLESS TOURNAMENT IMPORT"
+  );
   console.log("========================================");
   console.log("");
 
   console.log(
-    "Fetching VGC tournaments from Limitless..."
+    "Fetching tournaments from Limitless..."
   );
 
-  const response = await fetch(API_URL);
+  /*
+    IMPORTANT:
 
-  if (!response.ok) {
-    throw new Error(
-      `Limitless API returned ${response.status}`
-    );
-  }
+    The tournament list is ALWAYS fetched.
+
+    This is how Pkm Live discovers new tournaments.
+  */
+
+  const response =
+    await fetchWithRetry(API_URL);
 
   const tournaments =
     await response.json();
@@ -341,42 +321,90 @@ async function main() {
     `Received ${tournaments.length} tournaments.`
   );
 
+  /*
+    Load existing tournaments in one query.
+
+    This replaces one Supabase lookup per tournament.
+  */
+
+  const {
+    data: existingTournaments,
+    error: existingError,
+  } = await supabase
+    .from("tournaments")
+    .select(
+      "id, name, game, status, start_date, player_count, stream_url, tier, source_id"
+    )
+    .eq("source", "limitless");
+
+  if (existingError) {
+    throw existingError;
+  }
+
+  const existingMap =
+    new Map(
+      (existingTournaments ?? []).map(
+        (tournament) => [
+          String(tournament.source_id),
+          tournament,
+        ]
+      )
+    );
+
   let inserted = 0;
   let updated = 0;
   let unchanged = 0;
+  let skipped = 0;
   let streamsFound = 0;
+  let deepRefreshed = 0;
 
   let majorCount = 0;
   let officialCount = 0;
   let localCount = 0;
   let onlineCount = 0;
 
-  for (const tournament of tournaments) {
+  for (
+    let index = 0;
+    index < tournaments.length;
+    index++
+  ) {
+    const tournament =
+      tournaments[index];
+
     const tournamentId =
       String(tournament.id);
 
-    const startDate = tournament.date
-      ? new Date(
-          tournament.date
-        ).toISOString()
-      : null;
+    const game =
+      normalizeGame(tournament.game);
 
-    const status = startDate
-      ? new Date(startDate) > new Date()
-        ? "upcoming"
-        : "completed"
-      : "upcoming";
+    if (!game) {
+      skipped++;
 
-    /*
-      Determine tournament tier.
-    */
+      console.log(
+        `Skipping tournament because game could not be determined: ${tournament.name}`
+      );
+
+      continue;
+    }
+
+    const startDate =
+      tournament.date
+        ? new Date(
+            tournament.date
+          ).toISOString()
+        : null;
+
+    const status =
+      startDate
+        ? new Date(startDate) > new Date()
+          ? "upcoming"
+          : "completed"
+        : "upcoming";
 
     const tier =
-      getTournamentTier(tournament.name);
-
-    /*
-      Keep statistics for the import summary.
-    */
+      getTournamentTier(
+        tournament.name
+      );
 
     if (tier === "major") {
       majorCount++;
@@ -388,149 +416,158 @@ async function main() {
       onlineCount++;
     }
 
-    console.log(
-      `Tier: ${tier} | ${tournament.name}`
-    );
-
-    /*
-      Always check Limitless for a stream.
-
-      This allows a stream to be discovered even
-      after the tournament was originally imported.
-    */
-
-    const streamUrl =
-  await findStream(tournamentId);
-
-const game =
-  await detectTournamentGame(
-    tournamentId,
-    tournament.game
-  );
-
-    if (streamUrl) {
-      streamsFound++;
-
-      console.log(
-        `Stream found: ${streamUrl}`
-      );
-    } else {
-      console.log(
-        `No stream found for: ${tournament.name}`
-      );
-    }
-
-    /*
-      Check whether tournament already exists.
-    */
-
-    const {
-      data: existing,
-      error: lookupError,
-    } = await supabase
-      .from("tournaments")
-      .select(
-        "id, name, game, status, start_date, player_count, stream_url, tier"
-      )
-      .eq("source", "limitless")
-      .eq(
-        "source_id",
+    const existing =
+      existingMap.get(
         tournamentId
-      )
-      .maybeSingle();
+      );
 
-    if (lookupError) {
-      throw lookupError;
-    }
+    const isNew =
+      !existing;
+
+    const deepRefresh =
+      isNew ||
+      isDeepRefreshTournament(
+        startDate
+      );
+
+    let streamUrl =
+      existing?.stream_url ?? null;
 
     /*
-      EXISTING TOURNAMENT
+      Only perform the expensive HTML request when
+      the tournament is new or recent/upcoming.
     */
 
-    if (existing) {
-      const updates = {
-        name: tournament.name,
-        status,
-        start_date: startDate,
-        player_count:
-          tournament.players ?? 0,
-        stream_url: streamUrl,
-        tier,
-      };
+    if (deepRefresh) {
+      deepRefreshed++;
 
-      const hasChanges =
-        existing.name !== updates.name ||
-        existing.game !== updates.game ||
-        existing.status !== updates.status ||
-        existing.start_date !==
-          updates.start_date ||
-        existing.player_count !==
-          updates.player_count ||
-        existing.stream_url !==
-          updates.stream_url ||
-        existing.tier !== updates.tier;
+      console.log("");
+      console.log(
+        `[${index + 1}/${tournaments.length}] Deep refresh: ${tournament.name}`
+      );
 
-      if (!hasChanges) {
-        unchanged++;
+      const detectedStream =
+        await findStream(
+          tournamentId
+        );
+
+      if (detectedStream) {
+        streamUrl =
+          detectedStream;
+
+        streamsFound++;
 
         console.log(
-          `Unchanged: ${tournament.name}`
+          `Stream found: ${streamUrl}`
         );
-
-        continue;
+      } else {
+        console.log(
+          `No stream found: ${tournament.name}`
+        );
       }
+    } else {
+      console.log(
+        `[${index + 1}/${tournaments.length}] Historical metadata: ${tournament.name}`
+      );
+    }
 
+    const updates = {
+      name: tournament.name,
+      game,
+      status,
+      start_date: startDate,
+      player_count:
+        tournament.players ?? 0,
+      source: "limitless",
+      source_id: tournamentId,
+      stream_url: streamUrl,
+      tier,
+    };
+
+    /*
+      NEW TOURNAMENT
+    */
+
+    if (!existing) {
       const {
-        error: updateError,
+        data: insertedTournament,
+        error: insertError,
       } = await supabase
         .from("tournaments")
-        .update(updates)
-        .eq(
-          "id",
-          existing.id
-        );
+        .insert(updates)
+        .select(
+          "id, name, game, status, start_date, player_count, stream_url, tier, source_id"
+        )
+        .single();
 
-      if (updateError) {
-        throw updateError;
+      if (insertError) {
+        throw insertError;
       }
 
-      updated++;
+      existingMap.set(
+        tournamentId,
+        insertedTournament
+      );
+
+      inserted++;
 
       console.log(
-        `Updated: ${tournament.name}`
+        `Imported: ${tournament.name}`
       );
 
       continue;
     }
 
     /*
-      NEW TOURNAMENT
+      EXISTING TOURNAMENT
     */
 
-    const {
-      error: insertError,
-    } = await supabase
-      .from("tournaments")
-      .insert({
-        name: tournament.name,
-        status,
-        start_date: startDate,
-        player_count:
-          tournament.players ?? 0,
-        source: "limitless",
-        source_id: tournamentId,
-        stream_url: streamUrl,
-        tier,
-      });
+    const hasChanges =
+      existing.name !== updates.name ||
+      existing.game !== updates.game ||
+      existing.status !== updates.status ||
+      existing.start_date !==
+        updates.start_date ||
+      existing.player_count !==
+        updates.player_count ||
+      existing.stream_url !==
+        updates.stream_url ||
+      existing.tier !==
+        updates.tier;
 
-    if (insertError) {
-      throw insertError;
+    if (!hasChanges) {
+      unchanged++;
+      continue;
     }
 
-    inserted++;
+    const {
+      error: updateError,
+    } = await supabase
+      .from("tournaments")
+      .update({
+        name: updates.name,
+        game: updates.game,
+        status: updates.status,
+        start_date: updates.start_date,
+        player_count:
+          updates.player_count,
+        stream_url:
+          updates.stream_url,
+        tier: updates.tier,
+      })
+      .eq(
+        "id",
+        existing.id
+      );
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    updated++;
 
     console.log(
-      `Imported: ${tournament.name}`
+      `Updated: ${tournament.name}`
     );
   }
 
@@ -550,6 +587,14 @@ const game =
 
   console.log(
     `Unchanged:      ${unchanged}`
+  );
+
+  console.log(
+    `Skipped:        ${skipped}`
+  );
+
+  console.log(
+    `Deep refreshed: ${deepRefreshed}`
   );
 
   console.log(
@@ -581,10 +626,6 @@ const game =
   console.log("");
 }
 
-/* -------------------------------------------------------
-   RUN
-------------------------------------------------------- */
-
 main().catch((error) => {
   console.error("");
   console.error("========================================");
@@ -592,7 +633,13 @@ main().catch((error) => {
   console.error("========================================");
   console.error("");
 
-  console.error(error);
+  console.error(
+    error instanceof Error
+      ? error.message
+      : error
+  );
+
+  console.error("");
 
   process.exit(1);
 });
