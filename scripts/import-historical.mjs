@@ -522,7 +522,7 @@ async function getOrCreateTournament(
       tournamentRow,
       {
         onConflict:
-          "source,source_id",
+          "source_id",
       }
     )
     .select(
