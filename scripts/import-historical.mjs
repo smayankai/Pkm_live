@@ -1,7 +1,4 @@
 import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
-import fs from "fs";
-import path from "path";
 
 dotenv.config({
   path: process.env.GITHUB_ACTIONS
@@ -9,85 +6,120 @@ dotenv.config({
     : ".env.local",
 });
 
-/* =========================================================
-   CONFIG
-========================================================= */
+import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL =
+/* =======================================================
+   ENVIRONMENT
+======================================================= */
+
+const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.SUPABASE_URL;
 
-const SUPABASE_SERVICE_ROLE_KEY =
+const serviceRoleKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const LIMITLESS_API_BASE =
-  "https://play.limitlesstcg.com/api";
-
-const PAGE_SIZE = 200;
-
-/*
- * Large online events:
- *
- * 500+ players:
- *   automatically accepted.
- *
- * 250-499 players:
- *   automatically accepted.
- *
- * 150-249 players:
- *   only accepted when the name/organizer contains
- *   a recognized major-event signal.
- *
- * Below 150:
- *   excluded by default.
- */
-
-const ONLINE_AUTO_MIN_PLAYERS = 250;
-const ONLINE_HIGH_MIN_PLAYERS = 500;
-const ONLINE_RELEVANT_MIN_PLAYERS = 150;
-
-const REQUEST_DELAY_MS = 250;
-
-const MAX_RETRIES = 6;
-
-const CHECKPOINT_FILE = path.join(
-  process.cwd(),
-  ".historical-import-checkpoint.json"
-);
-
-/*
- * Permanent archive marker.
- *
- * Requires this column in Supabase:
- *
- * alter table tournaments
- * add column if not exists historical_imported_at timestamptz;
- */
-
-/* =========================================================
-   VALIDATION
-========================================================= */
-
-if (!SUPABASE_URL) {
+if (!supabaseUrl) {
   throw new Error(
-    "Missing NEXT_PUBLIC_SUPABASE_URL / SUPABASE_URL"
+    "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_URL"
   );
 }
 
-if (!SUPABASE_SERVICE_ROLE_KEY) {
+if (!serviceRoleKey) {
   throw new Error(
     "Missing SUPABASE_SERVICE_ROLE_KEY"
   );
 }
 
 const supabase = createClient(
-  SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY
+  supabaseUrl,
+  serviceRoleKey
 );
 
-/* =========================================================
+/* =======================================================
+   CONFIG
+======================================================= */
+
+const API_BASE =
+  "https://play.limitlesstcg.com/api/tournaments";
+
+const PAGE_SIZE = 200;
+
+/*
+  Limitless rate limits can be significant.
+
+  We deliberately keep the archive importer conservative.
+*/
+const RETRY_DELAYS = [
+  10000,
+  30000,
+  60000,
+  120000,
+  240000,
+];
+
+const MAX_RETRIES =
+  RETRY_DELAYS.length;
+
+const UPSERT_CHUNK_SIZE = 500;
+
+/*
+  Large online events.
+
+  250+ players:
+  automatically considered a historical candidate.
+
+  150-249 players:
+  only considered when the tournament name contains
+  a strong online/major signal.
+*/
+const ONLINE_AUTO_MIN_PLAYERS = 250;
+const ONLINE_RELEVANT_MIN_PLAYERS = 150;
+
+/*
+  Names that strongly indicate important online events.
+*/
+const ONLINE_SIGNALS = [
+  "limitless showdown",
+  "limitless invitational",
+  "limitless online",
+  "special online",
+  "online regional",
+  "online international",
+  "online championship",
+  "online championships",
+  "major online",
+  "international online",
+  "regional online",
+  "worlds online",
+];
+
+/*
+  Important physical events.
+*/
+const WORLD_SIGNALS = [
+  "world championships",
+  "world championship",
+  "worlds",
+];
+
+const INTERNATIONAL_SIGNALS = [
+  "international championships",
+  "international championship",
+  "naic",
+  "euic",
+  "laic",
+  "ocic",
+];
+
+const REGIONAL_SIGNALS = [
+  "regional championships",
+  "regional championship",
+];
+
+/* =======================================================
    HELPERS
-========================================================= */
+======================================================= */
 
 function sleep(ms) {
   return new Promise((resolve) =>
@@ -95,23 +127,14 @@ function sleep(ms) {
   );
 }
 
-function normalizeText(value) {
-  return String(value ?? "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function normalizeGame(game) {
   if (!game) {
     return null;
   }
 
-  const normalized =
-    String(game)
-      .trim()
-      .toUpperCase();
+  const normalized = String(game)
+    .trim()
+    .toUpperCase();
 
   if (!normalized) {
     return null;
@@ -124,498 +147,418 @@ function normalizeGame(game) {
   return normalized;
 }
 
-function loadCheckpoint() {
-  try {
-    if (!fs.existsSync(CHECKPOINT_FILE)) {
-      return {
-        completed: [],
-      };
-    }
-
-    const raw =
-      fs.readFileSync(
-        CHECKPOINT_FILE,
-        "utf8"
-      );
-
-    const parsed = JSON.parse(raw);
-
-    return {
-      completed:
-        Array.isArray(parsed.completed)
-          ? parsed.completed
-          : [],
-    };
-  } catch {
-    return {
-      completed: [],
-    };
-  }
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 }
 
-function saveCheckpoint(completed) {
-  fs.writeFileSync(
-    CHECKPOINT_FILE,
-    JSON.stringify(
-      {
-        updatedAt:
-          new Date().toISOString(),
-        completed,
-      },
-      null,
-      2
-    )
+function containsAny(text, signals) {
+  return signals.some((signal) =>
+    text.includes(signal)
   );
 }
 
-/* =========================================================
-   LIMITLESS API
-========================================================= */
-
-async function fetchJson(
-  url,
-  label = url
-) {
-  let lastError = null;
-
-  for (
-    let attempt = 1;
-    attempt <= MAX_RETRIES;
-    attempt++
-  ) {
-    try {
-      const response =
-        await fetch(url, {
-          headers: {
-            Accept:
-              "application/json",
-            "User-Agent":
-              "PKM-Live-Historical-Importer/1.0",
-          },
-        });
-
-      if (response.ok) {
-        await sleep(
-          REQUEST_DELAY_MS
-        );
-
-        return response.json();
-      }
-
-      const retryable =
-        response.status === 429 ||
-        response.status >= 500;
-
-      const body =
-        await response.text();
-
-      lastError =
-        new Error(
-          `${label}: HTTP ${response.status} ${body}`
-        );
-
-      if (!retryable) {
-        throw lastError;
-      }
-
-      const retryAfter =
-        Number(
-          response.headers.get(
-            "retry-after"
-          )
-        );
-
-      const wait =
-        Number.isFinite(
-          retryAfter
-        )
-          ? retryAfter * 1000
-          : Math.min(
-              30000,
-              1000 *
-                Math.pow(
-                  2,
-                  attempt - 1
-                )
-            );
-
-      console.log(
-        `Rate/server limit for ${label}. Waiting ${wait}ms...`
-      );
-
-      await sleep(wait);
-    } catch (error) {
-      lastError = error;
-
-      if (
-        attempt === MAX_RETRIES
-      ) {
-        break;
-      }
-
-      const wait =
-        Math.min(
-          30000,
-          1000 *
-            Math.pow(
-              2,
-              attempt - 1
-            )
-        );
-
-      console.log(
-        `Request failed for ${label}. Retry ${attempt}/${MAX_RETRIES} in ${wait}ms...`
-      );
-
-      await sleep(wait);
-    }
-  }
-
-  throw lastError;
-}
-
-/* =========================================================
-   TOURNAMENT CLASSIFICATION
-========================================================= */
-
-function getMajorType(name) {
-  const normalized =
-    normalizeText(name);
-
-  /*
-   * WORLD CHAMPIONSHIPS
-   */
-
-  if (
-    normalized.includes(
-      "world championships"
-    ) ||
-    normalized.includes(
-      "world championship"
-    ) ||
-    /\bworlds\b/.test(
-      normalized
-    )
-  ) {
-    return "world";
-  }
-
-  /*
-   * INTERNATIONAL CHAMPIONSHIPS
-   */
-
-  if (
-    normalized.includes(
-      "international championships"
-    ) ||
-    normalized.includes(
-      "international championship"
-    ) ||
-    /\bnaic\b/.test(normalized) ||
-    /\beuic\b/.test(normalized) ||
-    /\blaic\b/.test(normalized) ||
-    /\bocic\b/.test(normalized)
-  ) {
-    return "international";
-  }
-
-  /*
-   * REGIONAL CHAMPIONSHIPS
-   */
-
-  if (
-    normalized.includes(
-      "regional championships"
-    ) ||
-    normalized.includes(
-      "regional championship"
-    )
-  ) {
-    return "regional";
-  }
-
-  return null;
-}
-
-function hasRelevantOnlineSignal(
-  name,
-  organizerName
-) {
-  const text = normalizeText(
-    `${name} ${organizerName}`
-  );
-
-  /*
-   * These are deliberately conservative.
-   *
-   * We do NOT treat every tournament containing
-   * "cup", "series", "championship", etc. as major.
-   */
-
-  const signals = [
-    "limitless showdown",
-    "limitless invitational",
-    "limitless online",
-    "special online",
-    "online regional",
-    "online international",
-    "online championship",
-    "online championships",
-    "major online",
-    "international online",
-    "regional online",
-  ];
-
-  return signals.some(
-    (signal) =>
-      text.includes(signal)
-  );
-}
-
-function classifyTournament(
-  tournament,
-  details
-) {
-  const majorType =
-    getMajorType(
-      tournament.name
-    );
-
-  /*
-   * Official major events are always
-   * included regardless of player count.
-   */
-
-  if (majorType) {
-    return {
-      included: true,
-      category: majorType,
-      reason:
-        "official major championship",
-    };
-  }
-
-  /*
-   * Online events need explicit confirmation
-   * from the Limitless details endpoint.
-   */
-
-  const isOnline =
-    details?.isOnline === true;
-
-  if (!isOnline) {
-    return {
-      included: false,
-      category: null,
-      reason:
-        "not a Regional, International or World Championship and not online",
-    };
-  }
+function classifyTournament(tournament) {
+  const name =
+    normalizeText(tournament.name);
 
   const players =
-    Number(
-      tournament.players ?? 0
-    );
+    Number(tournament.players || 0);
 
   /*
-   * Very large online events.
-   */
+    World Championships
+  */
+  if (
+    containsAny(
+      name,
+      WORLD_SIGNALS
+    )
+  ) {
+    return {
+      include: true,
+      category: "worlds",
+      reason: "World Championship",
+    };
+  }
+
+  /*
+    International Championships
+  */
+  if (
+    containsAny(
+      name,
+      INTERNATIONAL_SIGNALS
+    )
+  ) {
+    return {
+      include: true,
+      category: "international",
+      reason:
+        "International Championship",
+    };
+  }
+
+  /*
+    Regional Championships
+  */
+  if (
+    containsAny(
+      name,
+      REGIONAL_SIGNALS
+    )
+  ) {
+    return {
+      include: true,
+      category: "regional",
+      reason:
+        "Regional Championship",
+    };
+  }
+
+  /*
+    Online events.
+
+    We cannot know isOnline from the basic
+    /tournaments response, so we use player count
+    and strong name signals to reduce detail requests.
+  */
+
+  const hasOnlineSignal =
+    containsAny(
+      name,
+      ONLINE_SIGNALS
+    );
 
   if (
     players >=
     ONLINE_AUTO_MIN_PLAYERS
   ) {
     return {
-      included: true,
+      include: true,
       category: "online",
       reason:
-        `large online event (${players} players)`,
+        "Large tournament",
     };
   }
-
-  /*
-   * 150-249 players requires an explicit
-   * recognized-major signal.
-   */
 
   if (
     players >=
       ONLINE_RELEVANT_MIN_PLAYERS &&
-    hasRelevantOnlineSignal(
-      tournament.name,
-      details?.organizer?.name
-    )
+    hasOnlineSignal
   ) {
     return {
-      included: true,
+      include: true,
       category: "online",
       reason:
-        `relevant online event (${players} players + recognized signal)`,
+        "Relevant online tournament",
     };
   }
 
   return {
-    included: false,
+    include: false,
     category: null,
-    reason:
-      `online event below archive relevance threshold (${players} players)`,
+    reason: "Not relevant",
   };
 }
 
-/* =========================================================
-   FETCH ALL HISTORICAL TOURNAMENTS
-========================================================= */
+/* =======================================================
+   LIMITLESS API
+======================================================= */
 
-async function fetchAllTournaments() {
-  const all = [];
+async function fetchJson(
+  url,
+  label
+) {
+  let attempt = 0;
+
+  while (true) {
+    let response;
+
+    try {
+      response =
+        await fetch(url);
+    } catch (error) {
+      if (
+        attempt >=
+        MAX_RETRIES
+      ) {
+        throw error;
+      }
+
+      const delay =
+        RETRY_DELAYS[attempt];
+
+      console.log("");
+
+      console.log(
+        `Network error for ${label}. Waiting ${
+          delay / 1000
+        }s...`
+      );
+
+      await sleep(delay);
+
+      attempt++;
+
+      continue;
+    }
+
+    if (response.ok) {
+      return response.json();
+    }
+
+    if (
+      response.status === 429 ||
+      response.status === 503 ||
+      response.status === 502
+    ) {
+      if (
+        attempt >=
+        MAX_RETRIES
+      ) {
+        throw new Error(
+          `Limitless server/rate limit persisted for ${label} after ${MAX_RETRIES} retries.`
+        );
+      }
+
+      const delay =
+        RETRY_DELAYS[attempt];
+
+      console.log("");
+
+      console.log(
+        `Rate/server limit for ${label}. Waiting ${
+          delay / 1000
+        }ms...`
+      );
+
+      await sleep(delay);
+
+      attempt++;
+
+      continue;
+    }
+
+    if (
+      response.status === 404
+    ) {
+      throw new Error(
+        `Limitless returned 404 for ${label}`
+      );
+    }
+
+    throw new Error(
+      `Limitless API returned ${response.status} for ${label}`
+    );
+  }
+}
+
+/* =======================================================
+   FETCH ALL TOURNAMENT LIST ENTRIES
+======================================================= */
+
+async function fetchAllTournamentListings() {
+  const tournaments = [];
 
   let page = 1;
 
   while (true) {
-    const url =
-      `${LIMITLESS_API_BASE}/tournaments` +
-      `?limit=${PAGE_SIZE}` +
-      `&page=${page}`;
-
     console.log(
       `Fetching tournament page ${page}...`
     );
 
-    const tournaments =
+    const url =
+      `${API_BASE}?limit=${PAGE_SIZE}&page=${page}`;
+
+    const batch =
       await fetchJson(
         url,
         `tournament page ${page}`
       );
 
     if (
-      !Array.isArray(
-        tournaments
-      ) ||
-      tournaments.length === 0
+      !Array.isArray(batch)
     ) {
-      break;
+      throw new Error(
+        `Unexpected tournament list response on page ${page}.`
+      );
     }
 
-    all.push(
-      ...tournaments
+    tournaments.push(
+      ...batch
     );
 
     console.log(
-      `Received ${tournaments.length} tournaments. Total: ${all.length}`
+      `Received ${batch.length} tournaments. Total: ${tournaments.length}`
     );
 
     if (
-      tournaments.length <
+      batch.length <
       PAGE_SIZE
     ) {
       break;
     }
 
     page++;
+
+    /*
+      Small delay between list pages.
+    */
+    await sleep(250);
   }
 
-  return all;
+  return tournaments;
 }
 
-/* =========================================================
-   SUPABASE TOURNAMENT
-========================================================= */
+/* =======================================================
+   SUPABASE HELPERS
+======================================================= */
 
-async function getOrCreateTournament(
-  tournament,
-  classification
+async function upsertChunks(
+  table,
+  rows,
+  options
 ) {
-  const sourceId =
-    String(tournament.id);
+  for (
+    let index = 0;
+    index < rows.length;
+    index +=
+      UPSERT_CHUNK_SIZE
+  ) {
+    const chunk =
+      rows.slice(
+        index,
+        index +
+          UPSERT_CHUNK_SIZE
+      );
 
-  const startDate =
-    tournament.date
-      ? new Date(
-          tournament.date
-        ).toISOString()
-      : null;
-
-  const status =
-    startDate &&
-    new Date(startDate) >
-      new Date()
-      ? "upcoming"
-      : "completed";
-
-  const game =
-    normalizeGame(
-      tournament.game
-    );
-
-  const {
-    data: existing,
-    error: lookupError,
-  } = await supabase
-    .from("tournaments")
-    .select(
-      "id, name, game, status, start_date, player_count, tier, historical_imported_at"
-    )
-    .eq(
-      "source",
-      "limitless"
-    )
-    .eq(
-      "source_id",
-      sourceId
-    )
-    .maybeSingle();
-
-  if (lookupError) {
-    throw lookupError;
-  }
-
-  const data = {
-    name:
-      tournament.name,
-    game,
-    status,
-    start_date:
-      startDate,
-    player_count:
-      tournament.players ??
-      0,
-    source:
-      "limitless",
-    source_id:
-      sourceId,
-    tier:
-      "major",
-  };
-
-  if (existing) {
     const {
       error,
     } = await supabase
-      .from("tournaments")
-      .update(data)
-      .eq(
-        "id",
-        existing.id
+      .from(table)
+      .upsert(
+        chunk,
+        options
       );
 
     if (error) {
       throw error;
     }
-
-    return {
-      ...existing,
-      ...data,
-    };
   }
+}
 
+/* =======================================================
+   EXISTING HISTORICAL TOURNAMENTS
+======================================================= */
+
+async function loadCompletedHistoricalIds() {
   const {
-    data: inserted,
+    data,
     error,
   } = await supabase
     .from("tournaments")
-    .insert(data)
     .select(
-      "id, name, game, status, start_date, player_count, tier, historical_imported_at"
+      "source_id"
+    )
+    .eq(
+      "source",
+      "limitless"
+    )
+    .not(
+      "historical_imported_at",
+      "is",
+      null
+    );
+
+  if (error) {
+    throw error;
+  }
+
+  return new Set(
+    (data || []).map(
+      (row) =>
+        String(
+          row.source_id
+        )
+    )
+  );
+}
+
+/* =======================================================
+   TOURNAMENT UPSERT
+======================================================= */
+
+async function getOrCreateTournament(
+  listing,
+  details,
+  classification
+) {
+  const sourceId =
+    String(listing.id);
+
+  const game =
+    normalizeGame(
+      details.game ||
+        listing.game
+    );
+
+  const tournamentRow = {
+    name:
+      details.name ||
+      listing.name,
+
+    source:
+      "limitless",
+
+    source_id:
+      sourceId,
+
+    game,
+
+    format:
+      details.format ||
+      listing.format ||
+      null,
+
+    start_date:
+      details.date ||
+      listing.date ||
+      null,
+
+    player_count:
+      Number(
+        details.players ??
+          listing.players ??
+          0
+      ),
+
+    tier:
+      classification.category ===
+      "online"
+        ? "online"
+        : "major",
+  };
+
+  /*
+    Update existing tournament or create it.
+  */
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from("tournaments")
+    .upsert(
+      tournamentRow,
+      {
+        onConflict:
+          "source,source_id",
+      }
+    )
+    .select(
+      "id, name, source_id"
     )
     .single();
 
@@ -623,12 +566,12 @@ async function getOrCreateTournament(
     throw error;
   }
 
-  return inserted;
+  return data;
 }
 
-/* =========================================================
-   PLAYERS + STANDINGS + DECKLISTS
-========================================================= */
+/* =======================================================
+   PLAYERS + STANDINGS
+======================================================= */
 
 async function importStandings(
   tournament,
@@ -637,325 +580,196 @@ async function importStandings(
   if (
     !Array.isArray(
       standings
-    )
+    ) ||
+    standings.length === 0
   ) {
     return {
       players: 0,
-      standings: 0,
       decklists: 0,
+      missingDecklists: 0,
     };
   }
 
   const playerSourceIds = [
     ...new Set(
-      standings
-        .map((entry) =>
+      standings.map(
+        (entry) =>
           String(
             entry.player
           )
-        )
-        .filter(Boolean)
+      )
     ),
   ];
 
-  const playerMap =
-    new Map();
-
   /*
-   * Load existing players in batches.
-   */
+    Create/update players.
+  */
 
-  for (
-    let i = 0;
-    i <
-    playerSourceIds.length;
-    i += 500
-  ) {
-    const batch =
-      playerSourceIds.slice(
-        i,
-        i + 500
-      );
-
-    const {
-      data,
-      error,
-    } = await supabase
-      .from("players")
-      .select(
-        "id, source_id"
-      )
-      .eq(
-        "source",
-        "limitless"
-      )
-      .in(
-        "source_id",
-        batch
-      );
-
-    if (error) {
-      throw error;
-    }
-
-    for (const player of
-      data ?? []) {
-      playerMap.set(
-        player.source_id,
-        player.id
-      );
-    }
-  }
-
-  let newPlayers = 0;
-
-  /*
-   * Create missing players.
-   */
-
-  for (const entry of
-    standings) {
-    const sourceId =
-      String(
-        entry.player
-      );
-
-    if (
-      playerMap.has(
-        sourceId
-      )
-    ) {
-      continue;
-    }
-
-    const {
-      data,
-      error,
-    } = await supabase
-      .from("players")
-      .insert({
+  const playerRows =
+    standings.map(
+      (entry) => ({
         name:
           entry.name ||
           entry.player,
+
         country:
           entry.country ||
           null,
+
         source:
           "limitless",
+
         source_id:
-          sourceId,
+          String(
+            entry.player
+          ),
       })
-      .select(
-        "id, source_id"
-      )
-      .single();
-
-    if (error) {
-      /*
-       * Another run may have created
-       * the player between our lookup
-       * and insert.
-       */
-
-      if (
-        error.code ===
-        "23505"
-      ) {
-        const {
-          data: existing,
-          error:
-            lookupError,
-        } = await supabase
-          .from("players")
-          .select(
-            "id, source_id"
-          )
-          .eq(
-            "source",
-            "limitless"
-          )
-          .eq(
-            "source_id",
-            sourceId
-          )
-          .single();
-
-        if (lookupError) {
-          throw lookupError;
-        }
-
-        playerMap.set(
-          sourceId,
-          existing.id
-        );
-
-        continue;
-      }
-
-      throw error;
-    }
-
-    playerMap.set(
-      sourceId,
-      data.id
     );
 
-    newPlayers++;
-  }
+  await upsertChunks(
+    "players",
+    playerRows,
+    {
+      onConflict:
+        "source,source_id",
+    }
+  );
 
   /*
-   * Update player display information.
-   */
+    Reload players to obtain UUIDs.
+  */
 
-  for (const entry of
-    standings) {
-    const sourceId =
-      String(
-        entry.player
-      );
+  const {
+    data: players,
+    error:
+      playersError,
+  } = await supabase
+    .from("players")
+    .select(
+      "id, source_id"
+    )
+    .eq(
+      "source",
+      "limitless"
+    )
+    .in(
+      "source_id",
+      playerSourceIds
+    );
 
+  if (playersError) {
+    throw playersError;
+  }
+
+  const playerMap =
+    new Map(
+      (players || []).map(
+        (player) => [
+          String(
+            player.source_id
+          ),
+          player.id,
+        ]
+      )
+    );
+
+  const standingsRows = [];
+
+  let decklists =
+    0;
+
+  let missingDecklists =
+    0;
+
+  for (
+    const entry of standings
+  ) {
     const playerId =
       playerMap.get(
-        sourceId
+        String(
+          entry.player
+        )
       );
 
     if (!playerId) {
-      continue;
-    }
-
-    const {
-      error,
-    } = await supabase
-      .from("players")
-      .update({
-        name:
-          entry.name ||
-          entry.player,
-        country:
-          entry.country ||
-          null,
-        updated_at:
-          new Date().toISOString(),
-      })
-      .eq(
-        "id",
-        playerId
+      throw new Error(
+        `Player ${entry.player} could not be resolved.`
       );
-
-    if (error) {
-      throw error;
     }
-  }
 
-  /*
-   * Build standings rows.
-   */
+    const record =
+      entry.record || {};
 
-  const standingsRows =
-    standings.map(
-      (entry) => {
-        const playerId =
-          playerMap.get(
-            String(
-              entry.player
-            )
-          );
+    const row = {
+      tournament_id:
+        tournament.id,
 
-        const record =
-          entry.record ||
-          {};
+      player_id:
+        playerId,
 
-        const row = {
-          tournament_id:
-            tournament.id,
-          player_id:
-            playerId,
-          rank:
-            entry.placing ??
-            null,
-          wins:
-            record.wins ??
-            0,
-          losses:
-            record.losses ??
-            0,
-          ties:
-            record.ties ??
-            0,
-          updated_at:
-            new Date().toISOString(),
-        };
+      rank:
+        entry.placing ??
+        null,
 
-        /*
-         * Never overwrite an existing
-         * decklist with null.
-         */
+      wins:
+        record.wins ?? 0,
 
-        if (
-          entry.decklist !=
-          null
-        ) {
-          row.decklist =
-            entry.decklist;
-        }
+      losses:
+        record.losses ?? 0,
 
-        return row;
-      }
+      ties:
+        record.ties ?? 0,
+
+      updated_at:
+        new Date().toISOString(),
+    };
+
+    /*
+      Preserve existing decklists if Limitless
+      does not return one.
+    */
+
+    if (
+      entry.decklist !==
+      null &&
+      entry.decklist !==
+        undefined
+    ) {
+      row.decklist =
+        entry.decklist;
+
+      decklists++;
+    } else {
+      missingDecklists++;
+    }
+
+    standingsRows.push(
+      row
     );
-
-  /*
-   * Upsert in chunks to avoid
-   * oversized requests.
-   */
-
-  for (
-    let i = 0;
-    i <
-    standingsRows.length;
-    i += 500
-  ) {
-    const batch =
-      standingsRows.slice(
-        i,
-        i + 500
-      );
-
-    const {
-      error,
-    } = await supabase
-      .from("standings")
-      .upsert(
-        batch,
-        {
-          onConflict:
-            "tournament_id,player_id",
-        }
-      );
-
-    if (error) {
-      throw error;
-    }
   }
 
-  const decklists =
-    standings.filter(
-      (entry) =>
-        entry.decklist !=
-        null
-    ).length;
+  await upsertChunks(
+    "standings",
+    standingsRows,
+    {
+      onConflict:
+        "tournament_id,player_id",
+    }
+  );
 
   return {
     players:
-      newPlayers,
-    standings:
-      standingsRows.length,
+      standings.length,
+
     decklists,
+
+    missingDecklists,
   };
 }
 
-/* =========================================================
-   MATCHES
-========================================================= */
+/* =======================================================
+   MATCHES / PAIRINGS
+======================================================= */
 
 async function importPairings(
   tournament,
@@ -964,12 +778,10 @@ async function importPairings(
   if (
     !Array.isArray(
       pairings
-    )
+    ) ||
+    pairings.length === 0
   ) {
-    return {
-      matches: 0,
-      missingPlayers: 0,
-    };
+    return 0;
   }
 
   const completePairings =
@@ -979,7 +791,14 @@ async function importPairings(
         pairing.player2
     );
 
-  const sourceIds = [
+  if (
+    completePairings.length ===
+    0
+  ) {
+    return 0;
+  }
+
+  const playerSourceIds = [
     ...new Set(
       completePairings.flatMap(
         (pairing) => [
@@ -994,66 +813,54 @@ async function importPairings(
     ),
   ];
 
-  const playerMap =
-    new Map();
+  const {
+    data: players,
+    error:
+      playersError,
+  } = await supabase
+    .from("players")
+    .select(
+      "id, source_id"
+    )
+    .eq(
+      "source",
+      "limitless"
+    )
+    .in(
+      "source_id",
+      playerSourceIds
+    );
 
-  for (
-    let i = 0;
-    i <
-    sourceIds.length;
-    i += 500
-  ) {
-    const batch =
-      sourceIds.slice(
-        i,
-        i + 500
-      );
-
-    const {
-      data,
-      error,
-    } = await supabase
-      .from("players")
-      .select(
-        "id, source_id"
-      )
-      .eq(
-        "source",
-        "limitless"
-      )
-      .in(
-        "source_id",
-        batch
-      );
-
-    if (error) {
-      throw error;
-    }
-
-    for (const player of
-      data ?? []) {
-      playerMap.set(
-        player.source_id,
-        player.id
-      );
-    }
+  if (playersError) {
+    throw playersError;
   }
 
-  const rows = [];
+  const playerMap =
+    new Map(
+      (players || []).map(
+        (player) => [
+          String(
+            player.source_id
+          ),
+          player.id,
+        ]
+      )
+    );
 
-  let missingPlayers =
-    0;
+  const matchRows = [];
 
-  for (const pairing of
-    completePairings) {
-    const player1 =
+  for (
+    const pairing of
+      completePairings
+  ) {
+    const player1Id =
       playerMap.get(
         String(
           pairing.player1
         )
       );
 
-    const player2 =
+    const player2Id =
       playerMap.get(
         String(
           pairing.player2
@@ -1061,256 +868,269 @@ async function importPairings(
       );
 
     if (
-      !player1 ||
-      !player2
+      !player1Id ||
+      !player2Id
     ) {
-      missingPlayers++;
       continue;
     }
 
-    const winner =
-      pairing.winner !=
+    let winnerId = null;
+
+    if (
+      pairing.winner !==
         null &&
+      pairing.winner !==
+        undefined &&
       pairing.winner !==
         0 &&
       pairing.winner !==
         -1
-        ? playerMap.get(
-            String(
-              pairing.winner
-            )
+    ) {
+      winnerId =
+        playerMap.get(
+          String(
+            pairing.winner
           )
-        : null;
+        ) || null;
+    }
 
-    const status =
-      pairing.winner !=
-        null &&
-      pairing.winner !==
-        0 &&
-      pairing.winner !==
-        -1
-        ? "completed"
-        : "scheduled";
-
-    /*
-     * Match labels are important for
-     * live-bracket phases.
-     */
-
-    const sourceId =
-      [
-        String(
-          tournament.source_id
-        ),
+    const sourceId = [
+      String(
+        tournament.source_id
+      ),
+      String(
         pairing.phase ??
-          0,
+          0
+      ),
+      String(
         pairing.round ??
-          0,
+          0
+      ),
+      String(
         pairing.table ??
-          pairing.match ??
-          0,
-        String(
-          pairing.player1
-        ),
-        String(
-          pairing.player2
-        ),
-      ].join("-");
+          0
+      ),
+      String(
+        pairing.player1
+      ),
+      String(
+        pairing.player2
+      ),
+    ].join("-");
 
-    rows.push({
+    matchRows.push({
       tournament_id:
         tournament.id,
+
       round:
         pairing.round ??
         null,
+
       phase:
         pairing.phase ??
         null,
+
       table_number:
         pairing.table ??
         null,
+
       player1_id:
-        player1,
+        player1Id,
+
       player2_id:
-        player2,
+        player2Id,
+
       winner_id:
-        winner ?? null,
-      status,
+        winnerId,
+
+      status:
+        pairing.winner !==
+            null &&
+        pairing.winner !==
+          undefined
+          ? "completed"
+          : "scheduled",
+
       source:
         "limitless",
+
       source_id:
         sourceId,
     });
   }
 
-  for (
-    let i = 0;
-    i <
-    rows.length;
-    i += 500
+  if (
+    matchRows.length >
+    0
   ) {
-    const batch =
-      rows.slice(
-        i,
-        i + 500
-      );
-
-    const {
-      error,
-    } = await supabase
-      .from("matches")
-      .upsert(
-        batch,
-        {
-          onConflict:
-            "source,source_id",
-        }
-      );
-
-    if (error) {
-      throw error;
-    }
+    await upsertChunks(
+      "matches",
+      matchRows,
+      {
+        onConflict:
+          "source,source_id",
+      }
+    );
   }
 
-  return {
-    matches:
-      rows.length,
-    missingPlayers,
-  };
+  return matchRows.length;
 }
 
-/* =========================================================
-   TOURNAMENT IMPORT
-========================================================= */
+/* =======================================================
+   IMPORT ONE HISTORICAL TOURNAMENT
+======================================================= */
 
 async function importTournament(
-  tournament,
-  classification
+  listing,
+  classification,
+  index,
+  total
 ) {
   const sourceId =
-    String(tournament.id);
+    String(listing.id);
 
   console.log("");
   console.log(
-    "----------------------------------------"
+    "========================================"
   );
+
   console.log(
-    `IMPORT: ${tournament.name}`
+    `[${index}/${total}] ${listing.name}`
   );
+
   console.log(
-    `Limitless ID: ${sourceId}`
+    `Players: ${listing.players ?? 0}`
   );
+
   console.log(
     `Category: ${classification.category}`
   );
+
   console.log(
     `Reason: ${classification.reason}`
   );
+
   console.log(
-    "----------------------------------------"
+    "========================================"
+  );
+
+  /*
+    Details
+  */
+
+  const detailsUrl =
+    `${API_BASE}/${sourceId}/details`;
+
+  console.log(
+    "Fetching tournament details..."
   );
 
   const details =
     await fetchJson(
-      `${LIMITLESS_API_BASE}/tournaments/${sourceId}/details`,
-      `${tournament.name} details`
+      detailsUrl,
+      `${listing.name} details`
     );
 
-  const dbTournament =
+  /*
+    Online validation.
+
+    Large tournaments can still be in-person,
+    so for the "large tournament" pathway we use
+    details.isOnline to distinguish them.
+
+    Named online events are also checked.
+  */
+
+  if (
+    classification.category ===
+      "online" &&
+    details.isOnline !==
+      true &&
+    !containsAny(
+      normalizeText(
+        listing.name
+      ),
+      ONLINE_SIGNALS
+    )
+  ) {
+    console.log(
+      "Rejected: tournament is not marked online."
+    );
+
+    return {
+      imported: false,
+      reason:
+        "Not actually online",
+    };
+  }
+
+  /*
+    Tournament row
+  */
+
+  const tournament =
     await getOrCreateTournament(
-      tournament,
+      listing,
+      details,
       classification
     );
 
   /*
-   * Standings
-   */
+    Standings
+  */
 
-  let standingsResult = {
-    players: 0,
-    standings: 0,
-    decklists: 0,
-  };
+  console.log(
+    "Fetching standings..."
+  );
 
-  try {
-    const standings =
-      await fetchJson(
-        `${LIMITLESS_API_BASE}/tournaments/${sourceId}/standings`,
-        `${tournament.name} standings`
-      );
-
-    standingsResult =
-      await importStandings(
-        dbTournament,
-        standings
-      );
-
-    console.log(
-      `Standings: ${standingsResult.standings}`
+  const standings =
+    await fetchJson(
+      `${API_BASE}/${sourceId}/standings`,
+      `${listing.name} standings`
     );
 
-    console.log(
-      `New players: ${standingsResult.players}`
-    );
+  console.log(
+    `Standings received: ${standings.length}`
+  );
 
-    console.log(
-      `Decklists: ${standingsResult.decklists}`
+  const standingsResult =
+    await importStandings(
+      tournament,
+      standings
     );
-  } catch (error) {
-    console.error(
-      `Standings failed for ${tournament.name}:`,
-      error.message
-    );
-
-    throw error;
-  }
 
   /*
-   * Pairings
-   */
+    Pairings
+  */
 
-  let pairingsResult = {
-    matches: 0,
-    missingPlayers: 0,
-  };
+  console.log(
+    "Fetching pairings..."
+  );
 
-  try {
-    const pairings =
-      await fetchJson(
-        `${LIMITLESS_API_BASE}/tournaments/${sourceId}/pairings`,
-        `${tournament.name} pairings`
-      );
-
-    pairingsResult =
-      await importPairings(
-        dbTournament,
-        pairings
-      );
-
-    console.log(
-      `Matches: ${pairingsResult.matches}`
+  const pairings =
+    await fetchJson(
+      `${API_BASE}/${sourceId}/pairings`,
+      `${listing.name} pairings`
     );
 
-    console.log(
-      `Missing players: ${pairingsResult.missingPlayers}`
-    );
-  } catch (error) {
-    console.error(
-      `Pairings failed for ${tournament.name}:`,
-      error.message
-    );
+  console.log(
+    `Pairings received: ${pairings.length}`
+  );
 
-    throw error;
-  }
+  const matchesImported =
+    await importPairings(
+      tournament,
+      pairings
+    );
 
   /*
-   * Mark the tournament as
-   * successfully archived.
-   */
+    Mark completed only AFTER the entire tournament
+    successfully imported.
+  */
 
   const {
     error:
-      markerError,
+      completedError,
   } = await supabase
     .from("tournaments")
     .update({
@@ -1319,24 +1139,55 @@ async function importTournament(
     })
     .eq(
       "id",
-      dbTournament.id
+      tournament.id
     );
 
-  if (markerError) {
-    throw markerError;
+  if (completedError) {
+    throw completedError;
   }
 
+  console.log("");
+
+  console.log(
+    "✓ Historical tournament imported successfully."
+  );
+
+  console.log(
+    `Players: ${standingsResult.players}`
+  );
+
+  console.log(
+    `Decklists: ${standingsResult.decklists}`
+  );
+
+  console.log(
+    `Missing decklists: ${standingsResult.missingDecklists}`
+  );
+
+  console.log(
+    `Matches: ${matchesImported}`
+  );
+
   return {
-    standings:
-      standingsResult,
-    pairings:
-      pairingsResult,
+    imported: true,
+
+    players:
+      standingsResult.players,
+
+    decklists:
+      standingsResult.decklists,
+
+    missingDecklists:
+      standingsResult.missingDecklists,
+
+    matches:
+      matchesImported,
   };
 }
 
-/* =========================================================
+/* =======================================================
    MAIN
-========================================================= */
+======================================================= */
 
 async function main() {
   console.log("");
@@ -1349,6 +1200,7 @@ async function main() {
   console.log(
     "========================================"
   );
+
   console.log("");
 
   console.log(
@@ -1385,171 +1237,103 @@ async function main() {
 
   console.log("");
 
-  const checkpoint =
-    loadCheckpoint();
+  /*
+    -------------------------------------------------------
+    LOAD COMPLETED IDS
+    -------------------------------------------------------
+  */
 
-  const completed =
-    new Set(
-      checkpoint.completed
-    );
+  const completedIds =
+    await loadCompletedHistoricalIds();
 
   console.log(
-    `Previously completed tournaments: ${completed.size}`
+    `Previously completed tournaments: ${completedIds.size}`
   );
 
   /*
-   * Fetch every historical page.
-   */
+    -------------------------------------------------------
+    DISCOVER TOURNAMENTS
+    -------------------------------------------------------
+  */
 
-  const allTournaments =
-    await fetchAllTournaments();
+  const listings =
+    await fetchAllTournamentListings();
 
   console.log("");
+
   console.log(
-    `Total tournaments discovered: ${allTournaments.length}`
+    `Total tournaments discovered: ${listings.length}`
   );
 
   /*
-   * Sort oldest → newest.
-   *
-   * This makes the archive easier to
-   * resume and audit.
-   */
+    -------------------------------------------------------
+    FILTER BEFORE DETAILS REQUESTS
+    -------------------------------------------------------
+  */
 
-  allTournaments.sort(
-    (a, b) =>
-      new Date(
-        a.date ?? 0
-      ) -
-      new Date(
-        b.date ?? 0
-      )
-  );
+  const candidates = [];
 
-  let candidates = 0;
-  let imported = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  let regional = 0;
-  let international = 0;
   let worlds = 0;
+  let internationals = 0;
+  let regionals = 0;
   let online = 0;
 
-  let totalStandings = 0;
-  let totalDecklists = 0;
-  let totalMatches = 0;
-
-  /*
-   * ---------------------------------------------------------
-   * First pass:
-   *
-   * Major events can be classified directly from their names.
-   *
-   * Online events require a details request because Limitless
-   * exposes isOnline there.
-   * ---------------------------------------------------------
-   */
+  let alreadyCompleted = 0;
+  let rejected = 0;
 
   for (
-    const tournament of
-      allTournaments
+    const listing of listings
   ) {
     const sourceId =
-      String(
-        tournament.id
-      );
-
-    /*
-     * Already archived.
-     */
+      String(listing.id);
 
     if (
-      completed.has(
+      completedIds.has(
         sourceId
       )
     ) {
-      skipped++;
+      alreadyCompleted++;
+
       continue;
     }
 
-    /*
-     * Get major classification
-     * before making a details request.
-     */
-
-    const majorType =
-      getMajorType(
-        tournament.name
+    const classification =
+      classifyTournament(
+        listing
       );
 
-    let details = null;
-    let classification = null;
-
-    if (majorType) {
-      classification = {
-        included: true,
-        category:
-          majorType,
-        reason:
-          "official major championship",
-      };
-    } else {
-      /*
-       * Online status is only available
-       * reliably from tournament details.
-       */
-
-      try {
-        details =
-          await fetchJson(
-            `${LIMITLESS_API_BASE}/tournaments/${sourceId}/details`,
-            `${tournament.name} details`
-          );
-      } catch (error) {
-        console.error(
-          `Could not inspect ${tournament.name}: ${error.message}`
-        );
-
-        failed++;
-        continue;
-      }
-
-      classification =
-        classifyTournament(
-          tournament,
-          details
-        );
-    }
-
     if (
-      !classification.included
+      !classification.include
     ) {
-      skipped++;
+      rejected++;
+
       continue;
     }
 
-    candidates++;
+    candidates.push({
+      listing,
+      classification,
+    });
 
     if (
       classification.category ===
-      "regional"
+      "worlds"
     ) {
-      regional++;
+      worlds++;
     }
 
     if (
       classification.category ===
       "international"
     ) {
-      international++;
+      internationals++;
     }
 
     if (
       classification.category ===
-      "world"
+      "regional"
     ) {
-      worlds++;
+      regionals++;
     }
 
     if (
@@ -1558,187 +1342,314 @@ async function main() {
     ) {
       online++;
     }
+  }
 
-    /*
-     * Import.
-     *
-     * Details may already have been fetched
-     * during classification. The importer
-     * fetches it again only for consistency
-     * and because details can change.
-     */
+  /*
+    -------------------------------------------------------
+    CANDIDATE SUMMARY
+    -------------------------------------------------------
+  */
+
+  console.log("");
+
+  console.log(
+    "========================================"
+  );
+
+  console.log(
+    "HISTORICAL CANDIDATE FILTER"
+  );
+
+  console.log(
+    "========================================"
+  );
+
+  console.log("");
+
+  console.log(
+    `Total Limitless tournaments: ${listings.length}`
+  );
+
+  console.log(
+    `Already completed: ${alreadyCompleted}`
+  );
+
+  console.log(
+    `Rejected before details request: ${rejected}`
+  );
+
+  console.log(
+    `Candidates requiring details: ${candidates.length}`
+  );
+
+  console.log("");
+
+  console.log(
+    `World Championships: ${worlds}`
+  );
+
+  console.log(
+    `International Championships: ${internationals}`
+  );
+
+  console.log(
+    `Regional Championships: ${regionals}`
+  );
+
+  console.log(
+    `Large/relevant online candidates: ${online}`
+  );
+
+  console.log("");
+
+  /*
+    This is the key optimization.
+
+    We should NOT make 37,871 detail requests.
+
+    If the filter somehow selects an unexpectedly huge
+    percentage of the archive, stop safely.
+  */
+
+  const candidatePercentage =
+    listings.length > 0
+      ? (
+          candidates.length /
+          listings.length
+        ) *
+        100
+      : 0;
+
+  if (
+    listings.length >= 100 &&
+    candidatePercentage >= 50
+  ) {
+    throw new Error(
+      `Safety stop: ${candidates.length} of ${listings.length} tournaments (${candidatePercentage.toFixed(
+        1
+      )}%) were selected for expensive detail requests.`
+    );
+  }
+
+  if (
+    candidates.length ===
+    0
+  ) {
+    console.log(
+      "No new historical tournaments require importing."
+    );
+
+    return;
+  }
+
+  /*
+    -------------------------------------------------------
+    IMPORT CANDIDATES
+    -------------------------------------------------------
+  */
+
+  let imported = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  let totalPlayers = 0;
+  let totalDecklists = 0;
+  let totalMissingDecklists = 0;
+  let totalMatches = 0;
+
+  const failedTournaments = [];
+
+  for (
+    let index = 0;
+    index < candidates.length;
+    index++
+  ) {
+    const {
+      listing,
+      classification,
+    } =
+      candidates[index];
 
     try {
       const result =
         await importTournament(
-          tournament,
-          classification
+          listing,
+          classification,
+          index + 1,
+          candidates.length
         );
 
-      imported++;
+      if (
+        result.imported
+      ) {
+        imported++;
 
-      totalStandings +=
-        result.standings
-          .standings;
+        totalPlayers +=
+          result.players;
 
-      totalDecklists +=
-        result.standings
-          .decklists;
+        totalDecklists +=
+          result.decklists;
 
-      totalMatches +=
-        result.pairings
-          .matches;
+        totalMissingDecklists +=
+          result.missingDecklists;
 
-      completed.add(
-        sourceId
-      );
-
-      saveCheckpoint(
-        [...completed]
-      );
-
-      console.log(
-        `✓ Archived: ${tournament.name}`
-      );
+        totalMatches +=
+          result.matches;
+      } else {
+        skipped++;
+      }
     } catch (error) {
       failed++;
 
+      failedTournaments.push({
+        listing,
+        classification,
+      });
+
       console.error("");
+
       console.error(
-        `✗ FAILED: ${tournament.name}`
-      );
-      console.error(
-        error.message
+        `✗ FAILED: ${listing.name}`
       );
 
-      /*
-       * Continue to the next tournament.
-       *
-       * The failed ID is NOT placed in the
-       * checkpoint, so a future run retries it.
-       */
-
-      continue;
+      console.error(
+        error instanceof Error
+          ? error.message
+          : String(error)
+      );
     }
   }
 
   /*
-   * ---------------------------------------------------------
-   * FINAL SUMMARY
-   * ---------------------------------------------------------
-   */
+    -------------------------------------------------------
+    FINAL SUMMARY
+    -------------------------------------------------------
+  */
 
   console.log("");
+
   console.log(
     "========================================"
   );
+
   console.log(
-    "HISTORICAL ARCHIVE COMPLETE"
+    "HISTORICAL ARCHIVE IMPORT COMPLETE"
   );
+
   console.log(
     "========================================"
   );
-  console.log("");
-
-  console.log(
-    `Discovered:        ${allTournaments.length}`
-  );
-
-  console.log(
-    `Archive candidates: ${candidates}`
-  );
-
-  console.log(
-    `Imported:          ${imported}`
-  );
-
-  console.log(
-    `Skipped:           ${skipped}`
-  );
-
-  console.log(
-    `Failed:            ${failed}`
-  );
 
   console.log("");
 
   console.log(
-    "Archive categories:"
+    `Total tournaments discovered: ${listings.length}`
   );
 
   console.log(
-    `Regionals:         ${regional}`
+    `Previously completed: ${alreadyCompleted}`
   );
 
   console.log(
-    `Internationals:    ${international}`
+    `Candidates evaluated: ${candidates.length}`
   );
 
   console.log(
-    `Worlds:            ${worlds}`
+    `Imported: ${imported}`
   );
 
   console.log(
-    `Relevant online:   ${online}`
+    `Skipped: ${skipped}`
+  );
+
+  console.log(
+    `Failed: ${failed}`
   );
 
   console.log("");
 
   console.log(
-    "Imported data:"
+    `Player standings imported: ${totalPlayers}`
   );
 
   console.log(
-    `Standings:         ${totalStandings}`
+    `Decklists imported: ${totalDecklists}`
   );
 
   console.log(
-    `Decklists:         ${totalDecklists}`
+    `Decklists missing: ${totalMissingDecklists}`
   );
 
   console.log(
-    `Matches:           ${totalMatches}`
+    `Matches imported: ${totalMatches}`
   );
 
   console.log("");
 
-  console.log(
-    `Checkpoint: ${CHECKPOINT_FILE}`
-  );
-
-  console.log("");
-
-  if (failed > 0) {
+  if (
+    failedTournaments.length >
+    0
+  ) {
     console.log(
-      "Some tournaments failed and were left out of the checkpoint."
+      "Failed tournaments will be retried on the next historical run:"
     );
 
-    console.log(
-      "Run the importer again to retry them."
-    );
-  } else {
-    console.log(
-      "All selected historical tournaments were archived successfully."
-    );
+    for (
+      const failedTournament of
+        failedTournaments
+    ) {
+      console.log(
+        ` - ${failedTournament.listing.name}`
+      );
+    }
+
+    console.log("");
   }
+
+  /*
+    Important:
+
+    We do NOT throw when individual tournaments fail.
+
+    This allows GitHub Actions to complete the run and
+    the next annual run to retry only the failed events.
+  */
+
+  console.log(
+    "Historical archive process finished."
+  );
 
   console.log("");
 }
 
+/* =======================================================
+   ERROR HANDLING
+======================================================= */
+
 main().catch(
   (error) => {
     console.error("");
+
     console.error(
       "========================================"
     );
+
     console.error(
-      "HISTORICAL IMPORT FAILED"
+      "PKM LIVE — HISTORICAL IMPORT FAILED"
     );
+
     console.error(
       "========================================"
     );
+
     console.error("");
-    console.error(error);
+
+    console.error(
+      error instanceof Error
+        ? error.message
+        : String(error)
+    );
+
     console.error("");
 
     process.exit(1);
