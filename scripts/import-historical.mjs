@@ -45,11 +45,6 @@ const API_BASE =
 
 const PAGE_SIZE = 200;
 
-/*
-  Limitless rate limits can be significant.
-
-  We deliberately keep the archive importer conservative.
-*/
 const RETRY_DELAYS = [
   10000,
   30000,
@@ -63,22 +58,9 @@ const MAX_RETRIES =
 
 const UPSERT_CHUNK_SIZE = 500;
 
-/*
-  Large online events.
-
-  250+ players:
-  automatically considered a historical candidate.
-
-  150-249 players:
-  only considered when the tournament name contains
-  a strong online/major signal.
-*/
 const ONLINE_AUTO_MIN_PLAYERS = 250;
 const ONLINE_RELEVANT_MIN_PLAYERS = 150;
 
-/*
-  Names that strongly indicate important online events.
-*/
 const ONLINE_SIGNALS = [
   "limitless showdown",
   "limitless invitational",
@@ -94,9 +76,6 @@ const ONLINE_SIGNALS = [
   "worlds online",
 ];
 
-/*
-  Important physical events.
-*/
 const WORLD_SIGNALS = [
   "world championships",
   "world championship",
@@ -167,9 +146,6 @@ function classifyTournament(tournament) {
   const players =
     Number(tournament.players || 0);
 
-  /*
-    World Championships
-  */
   if (
     containsAny(
       name,
@@ -183,9 +159,6 @@ function classifyTournament(tournament) {
     };
   }
 
-  /*
-    International Championships
-  */
   if (
     containsAny(
       name,
@@ -200,9 +173,6 @@ function classifyTournament(tournament) {
     };
   }
 
-  /*
-    Regional Championships
-  */
   if (
     containsAny(
       name,
@@ -216,14 +186,6 @@ function classifyTournament(tournament) {
         "Regional Championship",
     };
   }
-
-  /*
-    Online events.
-
-    We cannot know isOnline from the basic
-    /tournaments response, so we use player count
-    and strong name signals to reduce detail requests.
-  */
 
   const hasOnlineSignal =
     containsAny(
@@ -331,7 +293,7 @@ async function fetchJson(
       console.log(
         `Rate/server limit for ${label}. Waiting ${
           delay / 1000
-        }ms...`
+        }s...`
       );
 
       await sleep(delay);
@@ -349,8 +311,21 @@ async function fetchJson(
       );
     }
 
+    let body = "";
+
+    try {
+      body =
+        await response.text();
+    } catch {
+      body = "";
+    }
+
     throw new Error(
-      `Limitless API returned ${response.status} for ${label}`
+      `Limitless API returned ${response.status} for ${label}${
+        body
+          ? `: ${body.slice(0, 500)}`
+          : ""
+      }`
     );
   }
 }
@@ -403,9 +378,6 @@ async function fetchAllTournamentListings() {
 
     page++;
 
-    /*
-      Small delay between list pages.
-    */
     await sleep(250);
   }
 
@@ -541,10 +513,6 @@ async function getOrCreateTournament(
         : "major",
   };
 
-  /*
-    Update existing tournament or create it.
-  */
-
   const {
     data,
     error,
@@ -601,10 +569,6 @@ async function importStandings(
     ),
   ];
 
-  /*
-    Create/update players.
-  */
-
   const playerRows =
     standings.map(
       (entry) => ({
@@ -634,10 +598,6 @@ async function importStandings(
         "source,source_id",
     }
   );
-
-  /*
-    Reload players to obtain UUIDs.
-  */
 
   const {
     data: players,
@@ -723,11 +683,6 @@ async function importStandings(
       updated_at:
         new Date().toISOString(),
     };
-
-    /*
-      Preserve existing decklists if Limitless
-      does not return one.
-    */
 
     if (
       entry.decklist !==
@@ -1014,10 +969,6 @@ async function importTournament(
     "========================================"
   );
 
-  /*
-    Details
-  */
-
   const detailsUrl =
     `${API_BASE}/${sourceId}/details`;
 
@@ -1030,16 +981,6 @@ async function importTournament(
       detailsUrl,
       `${listing.name} details`
     );
-
-  /*
-    Online validation.
-
-    Large tournaments can still be in-person,
-    so for the "large tournament" pathway we use
-    details.isOnline to distinguish them.
-
-    Named online events are also checked.
-  */
 
   if (
     classification.category ===
@@ -1064,20 +1005,12 @@ async function importTournament(
     };
   }
 
-  /*
-    Tournament row
-  */
-
   const tournament =
     await getOrCreateTournament(
       listing,
       details,
       classification
     );
-
-  /*
-    Standings
-  */
 
   console.log(
     "Fetching standings..."
@@ -1089,6 +1022,16 @@ async function importTournament(
       `${listing.name} standings`
     );
 
+  if (
+    !Array.isArray(
+      standings
+    )
+  ) {
+    throw new Error(
+      `Unexpected standings response for ${listing.name}.`
+    );
+  }
+
   console.log(
     `Standings received: ${standings.length}`
   );
@@ -1098,10 +1041,6 @@ async function importTournament(
       tournament,
       standings
     );
-
-  /*
-    Pairings
-  */
 
   console.log(
     "Fetching pairings..."
@@ -1113,6 +1052,16 @@ async function importTournament(
       `${listing.name} pairings`
     );
 
+  if (
+    !Array.isArray(
+      pairings
+    )
+  ) {
+    throw new Error(
+      `Unexpected pairings response for ${listing.name}.`
+    );
+  }
+
   console.log(
     `Pairings received: ${pairings.length}`
   );
@@ -1122,11 +1071,6 @@ async function importTournament(
       tournament,
       pairings
     );
-
-  /*
-    Mark completed only AFTER the entire tournament
-    successfully imported.
-  */
 
   const {
     error:
@@ -1237,24 +1181,12 @@ async function main() {
 
   console.log("");
 
-  /*
-    -------------------------------------------------------
-    LOAD COMPLETED IDS
-    -------------------------------------------------------
-  */
-
   const completedIds =
     await loadCompletedHistoricalIds();
 
   console.log(
     `Previously completed tournaments: ${completedIds.size}`
   );
-
-  /*
-    -------------------------------------------------------
-    DISCOVER TOURNAMENTS
-    -------------------------------------------------------
-  */
 
   const listings =
     await fetchAllTournamentListings();
@@ -1264,12 +1196,6 @@ async function main() {
   console.log(
     `Total tournaments discovered: ${listings.length}`
   );
-
-  /*
-    -------------------------------------------------------
-    FILTER BEFORE DETAILS REQUESTS
-    -------------------------------------------------------
-  */
 
   const candidates = [];
 
@@ -1344,12 +1270,6 @@ async function main() {
     }
   }
 
-  /*
-    -------------------------------------------------------
-    CANDIDATE SUMMARY
-    -------------------------------------------------------
-  */
-
   console.log("");
 
   console.log(
@@ -1402,15 +1322,6 @@ async function main() {
 
   console.log("");
 
-  /*
-    This is the key optimization.
-
-    We should NOT make 37,871 detail requests.
-
-    If the filter somehow selects an unexpectedly huge
-    percentage of the archive, stop safely.
-  */
-
   const candidatePercentage =
     listings.length > 0
       ? (
@@ -1441,12 +1352,6 @@ async function main() {
 
     return;
   }
-
-  /*
-    -------------------------------------------------------
-    IMPORT CANDIDATES
-    -------------------------------------------------------
-  */
 
   let imported = 0;
   let skipped = 0;
@@ -1512,19 +1417,24 @@ async function main() {
         `✗ FAILED: ${listing.name}`
       );
 
-      console.error(
+      if (
         error instanceof Error
-          ? error.message
-          : String(error)
-      );
+      ) {
+        console.error(
+          error.stack ||
+            error.message
+        );
+      } else {
+        console.error(
+          JSON.stringify(
+            error,
+            null,
+            2
+          )
+        );
+      }
     }
   }
-
-  /*
-    -------------------------------------------------------
-    FINAL SUMMARY
-    -------------------------------------------------------
-  */
 
   console.log("");
 
@@ -1606,15 +1516,6 @@ async function main() {
     console.log("");
   }
 
-  /*
-    Important:
-
-    We do NOT throw when individual tournaments fail.
-
-    This allows GitHub Actions to complete the run and
-    the next annual run to retry only the failed events.
-  */
-
   console.log(
     "Historical archive process finished."
   );
@@ -1623,35 +1524,42 @@ async function main() {
 }
 
 /* =======================================================
-   ERROR HANDLING
+   ERROR HANDLER
 ======================================================= */
 
-main().catch(
-  (error) => {
-    console.error("");
+main().catch((error) => {
+  console.error("");
 
+  console.error(
+    "========================================"
+  );
+
+  console.error(
+    "PKM LIVE — HISTORICAL IMPORT FAILED"
+  );
+
+  console.error(
+    "========================================"
+  );
+
+  console.error("");
+
+  if (error instanceof Error) {
     console.error(
-      "========================================"
+      error.stack ||
+        error.message
     );
-
+  } else {
     console.error(
-      "PKM LIVE — HISTORICAL IMPORT FAILED"
+      JSON.stringify(
+        error,
+        null,
+        2
+      )
     );
-
-    console.error(
-      "========================================"
-    );
-
-    console.error("");
-
-    console.error(
-      error instanceof Error
-        ? error.message
-        : String(error)
-    );
-
-    console.error("");
-
-    process.exit(1);
   }
-);
+
+  console.error("");
+
+  process.exit(1);
+});
